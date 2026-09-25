@@ -648,6 +648,7 @@ describe('huddle tracker integration', () => {
     await flush();
 
     assert.equal(client.chat.postMessage.mock.callCount(), 0, 'no review prompt for an opted-out huddle');
+    assert.equal(store.getHuddle('R5').status, 'ended', 'opted-out huddle still ends silently');
 
     await handlers['event:user_huddle_changed']({
       event: {
@@ -657,7 +658,71 @@ describe('huddle tracker integration', () => {
         },
       },
     });
-    assert.equal(store.listHuddleMembers('R5').length, 1, 'no new members recorded after opt-out');
+    const members = store.listHuddleMembers('R5');
+    assert.equal(members.length, 1);
+    assert.equal(members[0].is_in, true, 'presence still recorded while opted out, for later re-enabling');
+
+    tracker.stop();
+  });
+
+  it('does not end the huddle while other members are still in it', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    for (const user of ['U1', 'U2']) {
+      await handlers['event:user_huddle_changed']({
+        event: { user: { id: user, profile: { huddle_state: 'in_a_huddle', huddle_state_call_id: 'Rmulti' } } },
+      });
+    }
+    assert.equal(store.listHuddleMembers('Rmulti').length, 2);
+
+    await handlers['event:user_huddle_changed']({
+      event: { user: { id: 'U1', profile: { huddle_state: 'not_in_a_huddle', huddle_state_call_id: 'Rmulti' } } },
+    });
+    await flush();
+
+    assert.equal(store.getHuddle('Rmulti').status, 'active', 'no finalize while U2 is still in the huddle');
+    assert.equal(client.chat.postMessage.mock.callCount(), 0);
+
+    await handlers['event:user_huddle_changed']({
+      event: { user: { id: 'U2', profile: { huddle_state: 'not_in_a_huddle', huddle_state_call_id: 'Rmulti' } } },
+    });
+    await flush();
+
+    assert.equal(store.getHuddle('Rmulti').status, 'ended', 'finalizes once the last member leaves');
+    assert.equal(client.chat.postMessage.mock.callCount(), 1, 'prompt only after the last member leaves');
+
+    tracker.stop();
+  });
+
+  it('re-tracks an ended huddle via the track-again button', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({
+      callId: 'Rold',
+      channelId: 'Crandom',
+      createdBy: 'UOWNER',
+      startedAt: 172000,
+      endedAt: 173000,
+      threadRootTs: '172000.000000',
+      participantHistory: ['UOWNER'],
+    });
+    store.setHuddleStatus('Rold', 'ended', 173000);
+    assert.equal(store.getHuddle('Rold').status, 'ended');
+
+    await handlers['action:huddle_track_again']({
+      ack: mock.fn(),
+      body: { user: { id: 'UOWNER' }, actions: [{ value: 'Rold' }] },
+      client,
+    });
+    await flush();
+
+    const revived = store.getHuddle('Rold');
+    assert.equal(revived.status, 'active');
+    assert.equal(revived.ended_at, null);
 
     tracker.stop();
   });

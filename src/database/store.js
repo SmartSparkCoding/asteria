@@ -1029,7 +1029,7 @@ export async function createStore(databasePath, options = {}) {
           status = $status,
           ended_at = COALESCE($ended_at, ended_at),
           last_seen_at = CURRENT_TIMESTAMP
-        WHERE call_id = $call_id AND status = 'active'
+        WHERE call_id = $call_id AND status IN ('active', 'opted_out')
       `,
         {
           $call_id: callId,
@@ -1076,8 +1076,8 @@ export async function createStore(databasePath, options = {}) {
       bindAndRun(
         database,
         `
-        UPDATE huddles SET status = 'active', last_seen_at = CURRENT_TIMESTAMP
-        WHERE call_id = $call_id AND status = 'opted_out'
+        UPDATE huddles SET status = 'active', ended_at = NULL, last_seen_at = CURRENT_TIMESTAMP
+        WHERE call_id = $call_id AND status IN ('opted_out', 'ended')
       `,
         {
           $call_id: callId,

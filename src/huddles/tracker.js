@@ -169,7 +169,11 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
   }
 
   async function finalizeHuddle(callId, endedAt) {
+    const wasOptedOut = store.getHuddle(callId)?.status === 'opted_out';
     if (!store.setHuddleStatus(callId, 'ended', endedAt)) {
+      return;
+    }
+    if (wasOptedOut) {
       return;
     }
     const huddle = store.getHuddle(callId);
@@ -198,9 +202,6 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
   async function applyJoin(userId, callId) {
     const joinedAt = nowEpochSeconds();
     store.setUserHuddleState({ userId, callId, isIn: true });
-    if (store.getHuddle(callId)?.status === 'opted_out') {
-      return;
-    }
     if (!store.getHuddle(callId)) {
       store.upsertHuddle({ callId, startedAt: joinedAt });
     }
@@ -216,10 +217,11 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
   async function applyLeave(userId, callId) {
     const leftAt = nowEpochSeconds();
     store.setUserHuddleState({ userId, callId: '', isIn: false });
-    if (store.getHuddle(callId)?.status === 'opted_out') {
+    store.upsertHuddleMember({ callId, userId, firstSeenAt: null, lastSeenAt: leftAt, isIn: false });
+    const othersStillIn = store.listHuddleMembers(callId).filter((member) => member.is_in && member.user_id !== userId);
+    if (othersStillIn.length > 0) {
       return;
     }
-    store.upsertHuddleMember({ callId, userId, firstSeenAt: null, lastSeenAt: leftAt, isIn: false });
     await finalizeHuddle(callId, leftAt);
   }
 
@@ -370,9 +372,30 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       return;
     }
     if (huddle && huddle.status !== 'active') {
-      await postReply(
-        "that huddle's already over - nothing to track 💀 :freddie-sleeping:. @ me again when the next one starts!",
-      );
+      await postReply({
+        text: "that huddle's already over - nothing to track 💀 :freddie-sleeping:. @ me again when the next one starts!",
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: "that huddle's already over 💀 :freddie-sleeping: - or is it? press it if it's actually still going:",
+            },
+          },
+          {
+            type: 'actions',
+            elements: [
+              {
+                type: 'button',
+                action_id: TRACK_AGAIN_ACTION_ID,
+                text: { type: 'plain_text', text: 'Track again' },
+                style: 'primary',
+                value: huddle.call_id,
+              },
+            ],
+          },
+        ],
+      });
       return;
     }
     const trackedHuddle = store.listHuddles().find((h) => h.status === 'active');
