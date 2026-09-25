@@ -691,8 +691,8 @@ describe('huddle tracker integration', () => {
 
     assert.equal(client.chat.postMessage.mock.callCount(), 1);
     const reply = client.chat.postMessage.mock.calls[0].arguments[0];
-    assert(reply.text.includes('huddle'), 'huddle-shaming reply');
-    assert(reply.text.includes('jokes by'), 'credit line present');
+    assert(!reply.text.includes('\n\n'), 'single punchline, not a stack');
+    assert(/7|huddle|clanker|freddie/.test(reply.text), 'silly content present');
 
     tracker.stop();
   });
@@ -824,7 +824,8 @@ describe('huddle tracker integration', () => {
     assert.equal(client.chat.postMessage.mock.callCount(), 1);
     const reply = client.chat.postMessage.mock.calls[0].arguments[0];
     assert.equal(reply.thread_ts, '999999.000000');
-    assert(reply.text.includes('jokes by'), 'silly joke reply');
+    assert(!reply.text.includes('\n\n'), 'single punchline');
+    assert(/7|clanker|freddie/.test(reply.text), 'silly content present');
 
     tracker.stop();
   });
@@ -858,8 +859,8 @@ describe('huddle tracker integration', () => {
     const reply = client.chat.postMessage.mock.calls[0].arguments[0];
     assert.equal(reply.channel, 'Crandom');
     assert.equal(reply.thread_ts, undefined, 'no thread_ts for channel message');
-    assert(reply.text.includes('huddle'), 'points at the active huddle');
-    assert(reply.text.includes('jokes by'));
+    assert(!reply.text.includes('\n\n'), 'single punchline');
+    assert(/7|huddle|clanker|freddie/.test(reply.text), 'silly content present');
 
     tracker.stop();
   });

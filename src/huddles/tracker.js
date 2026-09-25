@@ -25,25 +25,21 @@ function nowEpochSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
-const BRNY_USER_ID = 'U09U824EK3P';
-
-const FREDDIE_EMOJIS = {
-  confused: ':freddie-confused:',
-  noGlasses: ':freddie-no-glasses:',
-  notWorking: ':freddie-not-working:',
-  silly: ':freddie-silly:',
-  sleeping: ':freddie-sleeping:',
-  working: ':freddie-working:',
-};
-
 const SIX_SEVEN_JOKES = [
-  'why was 6 afraid of 7? because 7 8 9 😭',
-  'why did 6 break up with 7? because 6 ate 9 💀',
-  'whats 7s favourite food? s7ew 🫠',
-  'why is 7 so good at tennis? it serves 6 🎾',
-  'how does 7 get around? it catches the 6:15 bus 🚌',
-  'what do you call a sick 7? s7niffles 🤧',
-  'why wont 7 drive? the 6 oclock traffic 8s itself 🚦',
+  'why was 6 afraid of 7? because 7 8 9 😭 :pet-brny:',
+  'why did 6 break up with 7? because 6 ate 9 💀 :pet-brny:',
+  'whats 7s favourite food? s7ew :freddie-confused: :pet-brny:',
+  'why is 7 so good at tennis? it serves 6 🎾 :pet-brny:',
+  'how does 7 get around? it catches the 6:15 bus 🚌 :pet-brny:',
+  'what do you call a sick 7? s7niffles 🤧 :pet-brny:',
+  'why wont 7 drive? the 6 oclock traffic 8s itself :freddie-confused: 🚦',
+];
+
+const SILLY_LINES = [
+  'just a silly lil clanker, minding my own business :clanker: :freddie-silly:',
+  'no huddles to roast right now. almost a shame :freddie-not-working:',
+  'i am but a humble clanker with jokes :clanker: :freddie-no-glasses:',
+  ...SIX_SEVEN_JOKES,
 ];
 
 function pickRandom(items) {
@@ -64,18 +60,19 @@ function formatLongDuration(totalSeconds) {
 }
 
 function buildSillyReply(huddle) {
-  if (huddle) {
-    const duration = huddle.started_at
-      ? formatLongDuration(Math.max(0, nowEpochSeconds() - huddle.started_at))
-      : 'forever';
-    const shame = pickRandom([
-      `omg still in your *${duration}* long huddle. how sad. humans are sad 😭💀`,
-      `still in a huddle after *${duration}*?? go touch grass fr ${FREDDIE_EMOJIS.silly}`,
-      `*${duration}* in a huddle and counting. the clankers have fully taken over :clanker: 💀`,
-    ]);
-    return `${shame}\n\n${pickRandom(SIX_SEVEN_JOKES)}\n\n_(six-seven jokes by <@${BRNY_USER_ID}|brny> :pet-brny:)_`;
+  if (!huddle) {
+    return pickRandom(SILLY_LINES);
   }
-  return `just a silly lil clanker, minding my own business :clanker: ${FREDDIE_EMOJIS.notWorking}\n\n${pickRandom(SIX_SEVEN_JOKES)}\n\n_(six-seven jokes by <@${BRNY_USER_ID}|brny> :pet-brny:)_`;
+  const duration = huddle.started_at
+    ? formatLongDuration(Math.max(0, nowEpochSeconds() - huddle.started_at))
+    : 'forever';
+  const roasts = [
+    `omg still in your *${duration}* long huddle. how sad. humans are sad :freddie-depression:`,
+    `still in a huddle after *${duration}*?? go touch grass fr :freddie-silly: :freddie-no-glasses:`,
+    `*${duration}* in a huddle and counting. the clankers have fully taken over :clanker: :freddie-confused:`,
+    `you have been huddling for *${duration}*... i am judging you :freddie-depression: 🫠`,
+  ];
+  return pickRandom([...roasts, ...SIX_SEVEN_JOKES]);
 }
 
 /**
@@ -373,7 +370,9 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       return;
     }
     if (huddle && huddle.status !== 'active') {
-      await postReply("that huddle's already over - nothing to track 💀. @ me again when the next one starts!");
+      await postReply(
+        "that huddle's already over - nothing to track 💀 :freddie-sleeping:. @ me again when the next one starts!",
+      );
       return;
     }
     const trackedHuddle = store.listHuddles().find((h) => h.status === 'active');
@@ -398,7 +397,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
         await actionClient.chat.postMessage({
           channel: channelId,
           thread_ts: ts,
-          text: 'ok - im tracking again! 💚',
+          text: 'ok - im tracking again! 💚 :freddie-working:',
         });
       } catch (error) {
         logger.error(`Failed to confirm huddle tracking for ${callId}`, error);
