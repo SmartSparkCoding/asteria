@@ -7,6 +7,7 @@ import {
 import { nextUserHuddleAction } from './state.js';
 
 const GENERATE_REVIEW_ACTION_ID = 'generate_huddle_review';
+const OPT_OUT_ACTION_ID = 'huddle_opt_out';
 const STALE_HUDDLE_SECONDS = 12 * 60 * 60;
 const STALE_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -57,6 +58,48 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     };
   }
 
+  function buildOptOutPrompt(callId) {
+    return {
+      text: "Hi! FYI - i'm tracking your huddle for stats!",
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: ":wavey: Hi! FYI - i'm tracking your huddle for stats! If you'd prefer I didn't, press the button below!",
+          },
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              action_id: OPT_OUT_ACTION_ID,
+              text: { type: 'plain_text', text: 'Opt out of tracking' },
+              style: 'danger',
+              value: callId,
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  async function announceTrackingToThread(huddle) {
+    if (!huddle.channel_id || !huddle.thread_root_ts) {
+      return;
+    }
+    try {
+      await client.chat.postMessage({
+        channel: huddle.channel_id,
+        thread_ts: huddle.thread_root_ts,
+        ...buildOptOutPrompt(huddle.call_id),
+      });
+    } catch (error) {
+      logger.warn?.(`Could not post huddle tracking notice for ${huddle.call_id}`, error);
+    }
+  }
+
   async function postReviewPromptToThread(huddle, duration) {
     if (!huddle.channel_id || !huddle.thread_root_ts) {
       return false;
@@ -104,6 +147,9 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
   async function applyJoin(userId, callId) {
     const joinedAt = nowEpochSeconds();
     store.setUserHuddleState({ userId, callId, isIn: true });
+    if (store.getHuddle(callId)?.status === 'opted_out') {
+      return;
+    }
     if (!store.getHuddle(callId)) {
       store.upsertHuddle({ callId, startedAt: joinedAt });
     }
@@ -119,6 +165,9 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
   async function applyLeave(userId, callId) {
     const leftAt = nowEpochSeconds();
     store.setUserHuddleState({ userId, callId: '', isIn: false });
+    if (store.getHuddle(callId)?.status === 'opted_out') {
+      return;
+    }
     store.upsertHuddleMember({ callId, userId, firstSeenAt: null, lastSeenAt: leftAt, isIn: false });
     await finalizeHuddle(callId, leftAt);
   }
@@ -148,6 +197,10 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     if (room?.call_family !== 'huddle' || !room.id) {
       return;
     }
+    const existing = store.getHuddle(room.id);
+    if (existing?.status === 'opted_out') {
+      return;
+    }
     const endedAt = room.date_end || null;
     store.upsertHuddle({
       callId: room.id,
@@ -158,6 +211,9 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       threadRootTs: room.thread_root_ts || message.ts || '',
       participantHistory: room.participant_history || [],
     });
+    if (!existing && !endedAt) {
+      void announceTrackingToThread(store.getHuddle(room.id));
+    }
     if (endedAt) {
       void finalizeHuddle(room.id, endedAt);
     }
@@ -270,6 +326,41 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     });
   }
 
+  async function handleOptOut({ ack, body, client: actionClient }) {
+    if (ack) {
+      await ack();
+    }
+    const callId = body?.actions?.[0]?.value;
+    if (!callId) {
+      return;
+    }
+    if (!store.setHuddleOptedOut(callId)) {
+      return;
+    }
+    const ts = body?.message?.ts;
+    const channelId = body?.container?.channel_id ?? body?.channel?.id;
+    if (ts && channelId) {
+      try {
+        await actionClient.chat.update({
+          channel: channelId,
+          ts,
+          text: 'Okay — no stats or review for this huddle.',
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: ":no_bell: Okay — I've stopped tracking this huddle. No stats, and no review prompt when it ends.",
+              },
+            },
+          ],
+        });
+      } catch (error) {
+        logger.warn?.(`Could not update huddle opt-out message for ${callId}`, error);
+      }
+    }
+  }
+
   app.event('user_huddle_changed', (payload) => {
     void handleUserHuddleChange(payload).catch((error) => {
       logger.error('Handle user_huddle_changed', error);
@@ -279,6 +370,12 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
   app.action(GENERATE_REVIEW_ACTION_ID, (payload) => {
     void handleGenerateReview(payload).catch((error) => {
       logger.error('Generate huddle review', error);
+    });
+  });
+
+  app.action(OPT_OUT_ACTION_ID, (payload) => {
+    void handleOptOut(payload).catch((error) => {
+      logger.error('Opt out of huddle tracking', error);
     });
   });
 
@@ -308,6 +405,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
 
   return {
     GENERATE_REVIEW_ACTION_ID,
+    OPT_OUT_ACTION_ID,
     stop() {
       clearInterval(sweepTimer);
     },

@@ -974,7 +974,16 @@ export async function createStore(databasePath, options = {}) {
       return bindAndFetchAll(database, 'SELECT * FROM huddles ORDER BY started_at DESC');
     },
 
-    upsertHuddle({ callId, channelId = '', channelName = '', createdBy = '', startedAt = 0, endedAt = null, threadRootTs = '', participantHistory = [] }) {
+    upsertHuddle({
+      callId,
+      channelId = '',
+      channelName = '',
+      createdBy = '',
+      startedAt = 0,
+      endedAt = null,
+      threadRootTs = '',
+      participantHistory = [],
+    }) {
       const currentHuddle = this.getHuddle(callId);
       const mergedStartedAt =
         startedAt > 0 ? startedAt : currentHuddle?.started_at > 0 ? currentHuddle.started_at : startedAt;
@@ -1045,6 +1054,22 @@ export async function createStore(databasePath, options = {}) {
         },
       );
       persist();
+    },
+
+    setHuddleOptedOut(callId) {
+      bindAndRun(
+        database,
+        `
+        UPDATE huddles SET status = 'opted_out', last_seen_at = CURRENT_TIMESTAMP
+        WHERE call_id = $call_id
+      `,
+        {
+          $call_id: callId,
+        },
+      );
+      const changes = getRowsChanged(database);
+      persist();
+      return changes > 0;
     },
 
     listStaleActiveHuddles(beforeStartedAt) {

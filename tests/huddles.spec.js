@@ -65,6 +65,7 @@ function createBasicClient() {
       getPermalink: mock.fn(async (args) => ({
         permalink: `https://example.slack.com/archives/C/p${args.message_ts}`,
       })),
+      update: mock.fn(async () => ({ ts: '111.222' })),
     },
     conversations: {
       history: mock.fn(async () => ({ messages: [] })),
@@ -531,6 +532,130 @@ describe('huddle tracker integration', () => {
     assert.equal(huddle.created_by, 'UFRED');
     assert.equal(huddle.thread_root_ts, '175000.000000');
     assert.equal(huddle.status, 'active');
+
+    tracker.stop();
+  });
+
+  it('announces tracking with an opt-out button when a new huddle appears', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        channel: 'Crandom',
+        ts: '172000.000000',
+        room: {
+          id: 'Rnew',
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 172000,
+          date_end: 0,
+          thread_root_ts: '172000.000000',
+          channels: ['Crandom'],
+          participant_history: ['UOWNER'],
+        },
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 1);
+    const notice = client.chat.postMessage.mock.calls[0].arguments[0];
+    assert.equal(notice.channel, 'Crandom');
+    assert.equal(notice.thread_ts, '172000.000000');
+    assert(notice.blocks.some((block) => block.text?.text.includes("i'm tracking your huddle for stats")));
+    const noticeAction = notice.blocks.find((block) => block.type === 'actions').elements[0];
+    assert.equal(noticeAction.action_id, 'huddle_opt_out');
+    assert.equal(noticeAction.value, 'Rnew');
+
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        channel: 'Crandom',
+        ts: '172100.000000',
+        room: {
+          id: 'Rnew',
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 172000,
+          date_end: 172100,
+          thread_root_ts: '172000.000000',
+          channels: ['Crandom'],
+          participant_history: ['UOWNER'],
+        },
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 2, 'closing sends the review prompt, not another notice');
+    const closing = client.chat.postMessage.mock.calls[1].arguments[0];
+    assert.equal(
+      closing.blocks.find((block) => block.type === 'actions').elements[0].action_id,
+      'generate_huddle_review',
+    );
+
+    tracker.stop();
+  });
+
+  it('stops tracking a huddle when opted out, even if it ends later', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    await handlers['event:user_huddle_changed']({
+      event: {
+        user: {
+          id: 'UOWNER',
+          profile: { huddle_state: 'in_a_huddle', huddle_state_call_id: 'R5' },
+        },
+      },
+    });
+    assert.equal(store.getHuddle('R5').status, 'active');
+
+    await handlers['action:huddle_opt_out']({
+      ack: mock.fn(),
+      body: {
+        user: { id: 'UOWNER' },
+        actions: [{ value: 'R5' }],
+        message: { ts: '777.888' },
+        container: { channel_id: 'Crandom' },
+        channel: { id: 'Crandom' },
+      },
+      client,
+    });
+    await flush();
+
+    assert.equal(store.getHuddle('R5').status, 'opted_out');
+    assert.equal(client.chat.update.mock.callCount(), 1);
+    assert.equal(client.chat.update.mock.calls[0].arguments[0].ts, '777.888');
+    assert(
+      client.chat.update.mock.calls[0].arguments[0].blocks.some((block) =>
+        block.text?.text.includes('stopped tracking'),
+      ),
+    );
+
+    await handlers['event:user_huddle_changed']({
+      event: {
+        user: {
+          id: 'UOWNER',
+          profile: { huddle_state: 'not_in_a_huddle', huddle_state_call_id: 'R5' },
+        },
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 0, 'no review prompt for an opted-out huddle');
+
+    await handlers['event:user_huddle_changed']({
+      event: {
+        user: {
+          id: 'UOWNER',
+          profile: { huddle_state: 'in_a_huddle', huddle_state_call_id: 'R5' },
+        },
+      },
+    });
+    assert.equal(store.listHuddleMembers('R5').length, 1, 'no new members recorded after opt-out');
 
     tracker.stop();
   });
