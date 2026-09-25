@@ -2,6 +2,7 @@ import { App, LogLevel } from '@slack/bolt';
 import { createHomeHandlers } from './app-home/handlers.js';
 import { loadEnvironment } from './config/env.js';
 import { createStore } from './database/store.js';
+import { createHuddleTracker } from './huddles/tracker.js';
 import { createScheduler } from './scheduler.js';
 import { createHackClubAiService } from './services/ai.js';
 import { createTodoistSync } from './sync/todoist-sync.js';
@@ -59,6 +60,14 @@ export async function createAsteriaRuntime() {
     aiService,
     environment,
     scheduler,
+  });
+
+  const huddleTracker = createHuddleTracker({
+    app,
+    store,
+    client: app.client,
+    logger,
+    ownerId: store.getSettings().personal_channel_owner_id || environment.personalChannelOwnerId,
   });
 
   const todoistSync = createTodoistSync({
@@ -127,5 +136,6 @@ export async function createAsteriaRuntime() {
     todoistSync,
     webhookServer,
     syncPoller,
+    huddleTracker,
   };
 }

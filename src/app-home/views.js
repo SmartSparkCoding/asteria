@@ -1,3 +1,4 @@
+import { DateTime } from 'luxon';
 import { DEFAULT_QUESTION_PROMPT } from '../services/ai.js';
 import { contentToMrkdwn } from '../utils/messages.js';
 import { normalizeTimeValue } from '../utils/time.js';
@@ -12,6 +13,7 @@ function buildTabs(activeTab) {
     { id: 'daily-question', label: 'Daily Question' },
     { id: 'welcomer', label: 'Welcomer' },
     { id: 'home-assistant', label: 'Home Assistant' },
+    { id: 'huddles', label: 'Huddles' },
     { id: 'sync', label: 'Sync' },
     { id: 'settings', label: 'Settings' },
   ];
@@ -923,6 +925,54 @@ function buildSettingsView({ settings, notice }) {
   };
 }
 
+function formatHuddleSummary(huddle, timezone) {
+  const startLabel = huddle.started_at
+    ? DateTime.fromSeconds(huddle.started_at, { zone: timezone || 'UTC' }).toFormat('d LLL yyyy, HH:mm')
+    : 'unknown date';
+  const channelId = huddle.channel_id || '';
+  const channel = channelId.startsWith('D') || channelId.startsWith('G') ? 'a DM' : channelId ? `<#${channelId}>` : 'unknown channel';
+  const status = huddle.status === 'active' ? ' · :large_blue_circle: active now' : '';
+  return `• ${channel} · ${startLabel}${status}`;
+}
+
+export function buildHuddlesView({ huddles, notice, timezone }) {
+  return {
+    type: 'home',
+    callback_id: 'asteria_home_huddles',
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      ...buildBanner(notice),
+      buildTabs('huddles'),
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'Huddles Asteria has seen, most recent first. Every ended huddle can generate a review from its DM prompt.',
+        },
+      },
+      ...(huddles.length > 0
+        ? [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: huddles.map((huddle) => formatHuddleSummary(huddle, timezone)).join('\n'),
+              },
+            },
+          ]
+        : [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: '_No huddles recorded yet._',
+              },
+            },
+          ]),
+    ],
+  };
+}
+
 export function buildHomeView({
   tab,
   settings,
@@ -932,6 +982,7 @@ export function buildHomeView({
   notice,
   isOwner,
   syncSettings,
+  huddles,
 }) {
   if (!isOwner) {
     return buildReadOnlyView(settings);
@@ -951,6 +1002,10 @@ export function buildHomeView({
 
   if (tab === 'home-assistant') {
     return buildHomeAssistantView({ settings, notice, isOwner });
+  }
+
+  if (tab === 'huddles') {
+    return buildHuddlesView({ huddles: huddles || [], notice, timezone: settings.timezone });
   }
 
   if (tab === 'sync') {

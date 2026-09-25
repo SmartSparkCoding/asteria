@@ -13,6 +13,6 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src/sync/**/*.js", "src/config/**/*.js"],
+  "include": ["src/sync/**/*.js", "src/config/**/*.js", "src/huddles/**/*.js"],
   "exclude": ["node_modules", "tests"]
 }

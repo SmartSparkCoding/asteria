@@ -68,6 +68,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       settings.daily_question_enabled && lastQuestion?.question_text
         ? formatDailyQuestionMessage(lastQuestion.question_text, settings.daily_question_reply_text)
         : '';
+    const huddles = store.listHuddles().slice(0, 10);
 
     await publishHome(
       client,
@@ -80,6 +81,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
         questionPreview,
         recentQuestions,
         notice,
+        huddles,
         isOwner: userId === settings.personal_channel_owner_id,
       }),
     );
@@ -778,6 +780,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
   app.action('navigate_daily_question', (payload) => handleNavigation('daily-question', payload));
   app.action('navigate_welcomer', (payload) => handleNavigation('welcomer', payload));
   app.action('navigate_home_assistant', (payload) => handleNavigation('home-assistant', payload));
+  app.action('navigate_huddles', (payload) => handleNavigation('huddles', payload));
   app.action('navigate_sync', (payload) => handleNavigation('sync', payload));
   app.action('navigate_settings', (payload) => handleNavigation('settings', payload));
   app.action('open_daily_update_modal', handleOpenDailyUpdateModal);

@@ -20,22 +20,35 @@
   "oauth_config": {
     "scopes": {
       "bot": [
+        "channels:history",
         "channels:read",
         "chat:write",
         "chat:write.customize",
+        "groups:history",
         "groups:read",
+        "im:history",
         "im:write",
         "lists:read",
         "lists:write",
+        "mpim:history",
         "usergroups:read",
         "usergroups:write",
-        "users.profile:read"
+        "users.profile:read",
+        "users:read"
       ]
     }
   },
   "settings": {
     "event_subscriptions": {
-      "bot_events": ["app_home_opened", "member_joined_channel"]
+      "bot_events": [
+        "app_home_opened",
+        "member_joined_channel",
+        "user_huddle_changed",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim"
+      ]
     },
     "interactivity": {
       "is_enabled": true

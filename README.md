@@ -28,6 +28,7 @@ Asteria manages one specific Slack channel: your personal channel. You write a D
 - App Home configuration with Daily Update, Daily Question, Welcomer, Sync, and Settings tabs.
 - Owner-only configuration access with restricted views for everyone else.
 - Two-way Todoist ⇄ Slack List sync: list additions become Todoist tasks, completing a Todoist task marks the list item done and posts a message.
+- Huddle stats: when a huddle in your workspace ends, Asteria DMs for an optional review with total duration, attendance, and the longest / shortest message in the huddle chat.
 - SQLite persistence for settings, drafts, send history, question history, reminder state, and welcome deduplication.
 - Socket Mode operation with no public webhook server.
 - Optional status RSS feed for your bot (great for a Nest uptime monitor).
@@ -244,8 +245,24 @@ Asteria only requests the scopes it actually uses:
 - `channels:read` and `groups:read` for loading the personal channel picker in App Home.
 - `im:write` for opening a DM channel to you and sending reminder DMs.
 - `usergroups:read` for loading Slack user groups into the App Home selector.
+- `users:read` for the `user_huddle_changed` event that powers huddle presence tracking.
+- `channels:history`, `groups:history`, `im:history`, and `mpim:history` for reading a huddle's chat thread when a review is requested.
+
+The manifest enables the `user_huddle_changed` and `message.*` event subscriptions; these only deliver once the app is reinstalled with the updated manifest.
 
 If you change the manifest scopes, reinstall the Slack app in your workspace.
+
+## Huddle Stats
+
+When a huddle starts, Asteria tracks attendance through Slack's workspace-wide `user_huddle_changed` event and enriches it with room metadata from `huddle_thread` messages. When the last participant leaves (or a stale huddle times out), the huddle's starter is DMed with an optional "huddle review" button. The review shows total duration, who attended for how long, and — if requested — the longest and shortest messages sent in the huddle's chat thread. The review is only fetched after you press the button; **message text is never stored**, only used once to compute the lengths shown in that review.
+
+Presence is tracked per (call, user); per-session gaps are approximated from first/last seen timestamps.
+
+- The huddle starter gets the review prompt, falling back to the owner, then to the first person who joined.
+- The App Home has a **Huddles** tab listing every huddle Asteria has seen (channel + local date), most recent first.
+- Messages only count towards the longest/shortest stats if they were sent by a known participant inside the huddle's time window.
+- A `user_huddle_changed` event requires `users:read`; reading a huddle's chat thread requires the `*:history` scopes and the `message.*` event subscriptions enabled in the app manifest. Reinstall the app from the updated `manifest.json` for these to take effect.
+- Huddles left open longer than 12 hours with no active members are finalized automatically.
 
 ## Hack Club AI
 
@@ -264,6 +281,7 @@ Asteria uses the OpenAI-compatible Hack Club AI endpoint at `https://ai.hackclub
 - Daily Question not sending: check `daily_question_enabled`, the send time, the timezone, and the Hack Club AI key/model.
 - User group not pinging: verify the selected Slack user group still exists and reinstall the app if scopes changed.
 - Welcome message not firing: confirm the bot is in the personal channel and `welcomer_enabled` is on.
+- Huddle review prompt not arriving: confirm the app was reinstalled after adding `users:read`, the history scopes, and the `user_huddle_changed` / `message.*` event subscriptions — the bot only sees huddles once its own event subscriptions are live.
 - Owner sees the restricted view: verify `PERSONAL_CHANNEL_OWNER_ID` matches the Slack user who is opening App Home.
 - AI errors: verify `HACKCLUB_AI_KEY` and `HACKCLUB_AI_MODEL`, and check the server logs for the request failure.
 - Timezone issues: use a valid IANA timezone and save the setting again.

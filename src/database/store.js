@@ -303,6 +303,36 @@ export async function createStore(databasePath, options = {}) {
       UNIQUE(slack_item_id),
       UNIQUE(todoist_task_id)
     );
+
+    CREATE TABLE IF NOT EXISTS huddles (
+      call_id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL DEFAULT '',
+      channel_name TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      started_at INTEGER NOT NULL DEFAULT 0,
+      ended_at INTEGER,
+      thread_root_ts TEXT NOT NULL DEFAULT '',
+      participant_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'active',
+      last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS huddle_members (
+      call_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      first_seen_at INTEGER,
+      last_seen_at INTEGER,
+      is_in INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (call_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS huddle_user_state (
+      user_id TEXT PRIMARY KEY,
+      call_id TEXT NOT NULL DEFAULT '',
+      is_in INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   const existingSettingColumns = bindAndFetchAll(database, 'PRAGMA table_info(app_settings)').map(
@@ -932,6 +962,179 @@ export async function createStore(databasePath, options = {}) {
       );
       persist();
       return this.getSyncItemByTodoistTaskId(todoistTaskId);
+    },
+
+    getHuddle(callId) {
+      return bindAndFetchOne(database, 'SELECT * FROM huddles WHERE call_id = $call_id', {
+        $call_id: callId,
+      });
+    },
+
+    listHuddles() {
+      return bindAndFetchAll(database, 'SELECT * FROM huddles ORDER BY started_at DESC');
+    },
+
+    upsertHuddle({ callId, channelId = '', channelName = '', createdBy = '', startedAt = 0, endedAt = null, threadRootTs = '', participantHistory = [] }) {
+      const currentHuddle = this.getHuddle(callId);
+      const mergedStartedAt =
+        startedAt > 0 ? startedAt : currentHuddle?.started_at > 0 ? currentHuddle.started_at : startedAt;
+      const mergedEndedAt = endedAt ?? currentHuddle?.ended_at ?? null;
+      const mergedStatus = currentHuddle?.status || 'active';
+      bindAndRun(
+        database,
+        `
+        INSERT INTO huddles (call_id, channel_id, channel_name, created_by, started_at, ended_at, thread_root_ts, participant_json, status, last_seen_at, created_at)
+        VALUES ($call_id, $channel_id, $channel_name, $created_by, $started_at, $ended_at, $thread_root_ts, $participant_json, $status, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(call_id) DO UPDATE SET
+          channel_id = excluded.channel_id,
+          channel_name = excluded.channel_name,
+          created_by = excluded.created_by,
+          started_at = excluded.started_at,
+          ended_at = excluded.ended_at,
+          thread_root_ts = excluded.thread_root_ts,
+          participant_json = excluded.participant_json,
+          status = excluded.status,
+          last_seen_at = CURRENT_TIMESTAMP
+      `,
+        {
+          $call_id: callId,
+          $channel_id: channelId,
+          $channel_name: channelName,
+          $created_by: createdBy,
+          $started_at: mergedStartedAt,
+          $ended_at: mergedEndedAt,
+          $thread_root_ts: threadRootTs,
+          $participant_json: JSON.stringify(participantHistory ?? []),
+          $status: mergedStatus,
+        },
+      );
+      persist();
+      return this.getHuddle(callId);
+    },
+
+    setHuddleStatus(callId, status, endedAt = null) {
+      bindAndRun(
+        database,
+        `
+        UPDATE huddles SET
+          status = $status,
+          ended_at = COALESCE($ended_at, ended_at),
+          last_seen_at = CURRENT_TIMESTAMP
+        WHERE call_id = $call_id AND status = 'active'
+      `,
+        {
+          $call_id: callId,
+          $status: status,
+          $ended_at: endedAt,
+        },
+      );
+      const changes = getRowsChanged(database);
+      persist();
+      return changes > 0;
+    },
+
+    markHuddlePrompted(callId) {
+      bindAndRun(
+        database,
+        `
+        UPDATE huddles SET status = 'prompted', last_seen_at = CURRENT_TIMESTAMP
+        WHERE call_id = $call_id
+      `,
+        {
+          $call_id: callId,
+        },
+      );
+      persist();
+    },
+
+    listStaleActiveHuddles(beforeStartedAt) {
+      return bindAndFetchAll(
+        database,
+        `
+        SELECT * FROM huddles
+        WHERE status = 'active' AND started_at > 0 AND started_at < $before_started_at
+      `,
+        {
+          $before_started_at: beforeStartedAt,
+        },
+      );
+    },
+
+    getUserHuddleState(userId) {
+      return (
+        bindAndFetchOne(database, 'SELECT * FROM huddle_user_state WHERE user_id = $user_id', {
+          $user_id: userId,
+        }) ?? { user_id: userId, call_id: '', is_in: 0 }
+      );
+    },
+
+    setUserHuddleState({ userId, callId, isIn }) {
+      bindAndRun(
+        database,
+        `
+        INSERT INTO huddle_user_state (user_id, call_id, is_in, updated_at)
+        VALUES ($user_id, $call_id, $is_in, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id) DO UPDATE SET
+          call_id = excluded.call_id,
+          is_in = excluded.is_in,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+        {
+          $user_id: userId,
+          $call_id: callId,
+          $is_in: toBooleanInteger(isIn),
+        },
+      );
+      persist();
+    },
+
+    upsertHuddleMember({ callId, userId, firstSeenAt, lastSeenAt, isIn }) {
+      bindAndRun(
+        database,
+        `
+        INSERT INTO huddle_members (call_id, user_id, first_seen_at, last_seen_at, is_in)
+        VALUES ($call_id, $user_id, $first_seen_at, $last_seen_at, $is_in)
+        ON CONFLICT(call_id, user_id) DO UPDATE SET
+          first_seen_at = CASE
+            WHEN huddle_members.first_seen_at IS NULL
+              OR (excluded.first_seen_at IS NOT NULL AND excluded.first_seen_at < huddle_members.first_seen_at)
+            THEN excluded.first_seen_at
+            ELSE huddle_members.first_seen_at
+          END,
+          last_seen_at = CASE
+            WHEN huddle_members.last_seen_at IS NULL
+              OR (excluded.last_seen_at IS NOT NULL AND excluded.last_seen_at > huddle_members.last_seen_at)
+            THEN excluded.last_seen_at
+            ELSE huddle_members.last_seen_at
+          END,
+          is_in = excluded.is_in
+      `,
+        {
+          $call_id: callId,
+          $user_id: userId,
+          $first_seen_at: firstSeenAt ?? null,
+          $last_seen_at: lastSeenAt ?? null,
+          $is_in: toBooleanInteger(isIn),
+        },
+      );
+      persist();
+    },
+
+    listHuddleMembers(callId) {
+      return bindAndFetchAll(database, 'SELECT * FROM huddle_members WHERE call_id = $call_id', {
+        $call_id: callId,
+      });
+    },
+
+    countActiveHuddleMembers(callId) {
+      const row = bindAndFetchOne(
+        database,
+        'SELECT COUNT(1) AS count FROM huddle_members WHERE call_id = $call_id AND is_in = 1',
+        {
+          $call_id: callId,
+        },
+      );
+      return row.count;
     },
 
     close() {
