@@ -30,6 +30,50 @@ function nowEpochSeconds() {
  * is DMed for an optional huddle review.
  */
 export function createHuddleTracker({ app, store, client, logger, ownerId = '' }) {
+  function buildReviewPrompt(callId, duration) {
+    return {
+      text: 'Your huddle just ended. Want a huddle review?',
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `:headphones: Your huddle just ended (${formatDuration(duration)}). Want a *huddle review* with stats on attendance and the longest / shortest message in the huddle chat?`,
+          },
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              action_id: GENERATE_REVIEW_ACTION_ID,
+              text: { type: 'plain_text', text: 'Generate huddle review' },
+              style: 'primary',
+              value: callId,
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  async function postReviewPromptToThread(huddle, duration) {
+    if (!huddle.channel_id || !huddle.thread_root_ts) {
+      return false;
+    }
+    try {
+      await client.chat.postMessage({
+        channel: huddle.channel_id,
+        thread_ts: huddle.thread_root_ts,
+        ...buildReviewPrompt(huddle.call_id, duration),
+      });
+      return true;
+    } catch (error) {
+      logger.warn?.(`Could not post huddle review prompt to thread for ${huddle.call_id}, falling back to DM`, error);
+      return false;
+    }
+  }
+
   async function finalizeHuddle(callId, endedAt) {
     if (!store.setHuddleStatus(callId, 'ended', endedAt)) {
       return;
@@ -44,31 +88,13 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       return;
     }
     const duration = huddle.started_at && endedAt ? Math.max(0, endedAt - huddle.started_at) : 0;
+    if (await postReviewPromptToThread(huddle, duration)) {
+      return;
+    }
     try {
       await client.chat.postMessage({
         channel: recipient,
-        text: 'Your huddle just ended. Want a huddle review?',
-        blocks: [
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `:headphones: Your huddle just ended (${formatDuration(duration)}). Want a *huddle review* with stats on attendance and the longest / shortest message in the huddle chat?`,
-            },
-          },
-          {
-            type: 'actions',
-            elements: [
-              {
-                type: 'button',
-                action_id: GENERATE_REVIEW_ACTION_ID,
-                text: { type: 'plain_text', text: 'Generate huddle review' },
-                style: 'primary',
-                value: callId,
-              },
-            ],
-          },
-        ],
+        ...buildReviewPrompt(huddle.call_id, duration),
       });
     } catch (error) {
       logger.error(`Failed to DM huddle review prompt for ${callId}`, error);
@@ -145,6 +171,46 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
         await finalizeHuddle(huddle.call_id, huddle.started_at + STALE_HUDDLE_SECONDS);
       }
     }
+  }
+
+  let botUserIdPromise = null;
+
+  function getBotUserId() {
+    if (!client.auth?.test) {
+      return Promise.resolve('');
+    }
+    botUserIdPromise ??= client.auth
+      .test()
+      .then((result) => result?.user_id || '')
+      .catch((error) => {
+        logger.error('Failed to resolve bot user id', error);
+        return '';
+      });
+    return botUserIdPromise;
+  }
+
+  async function backfillChannelHuddles(channelId, actionClient) {
+    const historyClient = actionClient ?? client;
+    if (!historyClient.conversations?.history) {
+      return;
+    }
+    try {
+      const result = await historyClient.conversations.history({ channel: channelId, limit: 50 });
+      for (const message of result?.messages ?? []) {
+        if (message?.subtype === 'huddle_thread') {
+          handleHuddleThreadMessage(message);
+        }
+      }
+    } catch (error) {
+      logger.error(`Failed to backfill huddle_thread messages for ${channelId}`, error);
+    }
+  }
+
+  async function handleMemberJoinedChannel({ event, client: eventClient }) {
+    if (!event?.channel || !event?.user || event.user !== (await getBotUserId())) {
+      return;
+    }
+    await backfillChannelHuddles(event.channel, eventClient);
   }
 
   async function handleGenerateReview({ ack, body, client: actionClient }) {
@@ -225,6 +291,12 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
         logger.error('Handle huddle_thread message', error);
       }
     }
+  });
+
+  app.event('member_joined_channel', (payload) => {
+    void handleMemberJoinedChannel(payload).catch((error) => {
+      logger.error('Backfill huddles after joining a channel', error);
+    });
   });
 
   const sweepTimer = setInterval(() => {

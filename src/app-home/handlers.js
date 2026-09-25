@@ -68,7 +68,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       settings.daily_question_enabled && lastQuestion?.question_text
         ? formatDailyQuestionMessage(lastQuestion.question_text, settings.daily_question_reply_text)
         : '';
-    const huddles = store.listHuddles().slice(0, 10);
+    const huddles = store.listHuddles().filter((huddle) => huddle.channel_id).slice(0, 10);
 
     await publishHome(
       client,

@@ -57,6 +57,9 @@ function createTrackerHarness({ store, client, ownerId }) {
 
 function createBasicClient() {
   return {
+    auth: {
+      test: mock.fn(async () => ({ user_id: 'BOTUSER', bot_id: 'BOT123' })),
+    },
     chat: {
       postMessage: mock.fn(async () => ({ ts: '111.222' })),
       getPermalink: mock.fn(async (args) => ({
@@ -64,6 +67,7 @@ function createBasicClient() {
       })),
     },
     conversations: {
+      history: mock.fn(async () => ({ messages: [] })),
       replies: mock.fn(async () => ({ messages: [] })),
     },
   };
@@ -346,7 +350,8 @@ describe('huddle tracker integration', () => {
     assert.equal(store.getHuddle('R1').status, 'ended');
     assert.equal(client.chat.postMessage.mock.callCount(), 1);
     const prompt = client.chat.postMessage.mock.calls[0].arguments[0];
-    assert.equal(prompt.channel, 'UOWNER');
+    assert.equal(prompt.channel, 'Crandom');
+    assert.equal(prompt.thread_ts, '172000.000000');
     assert(prompt.blocks.some((block) => block.type === 'actions'));
     assert.equal(prompt.blocks.find((block) => block.type === 'actions').elements[0].value, 'R1');
 
@@ -429,6 +434,103 @@ describe('huddle tracker integration', () => {
 
     assert.equal(client.chat.postMessage.mock.callCount(), 1);
     assert.equal(client.chat.postMessage.mock.calls[0].arguments[0].channel, 'U5');
+
+    tracker.stop();
+  });
+
+  it('falls back to DMing the starter when the thread prompt cannot be posted', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    let postCount = 0;
+    client.chat.postMessage = mock.fn(async () => {
+      postCount += 1;
+      if (postCount === 1) {
+        throw new Error('cannot reply to a huddle thread');
+      }
+      return { ts: '111.222' };
+    });
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    await handlers['event:user_huddle_changed']({
+      event: {
+        user: {
+          id: 'UOWNER',
+          profile: { huddle_state: 'in_a_huddle', huddle_state_call_id: 'R3' },
+        },
+      },
+    });
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        channel: 'Cthr',
+        ts: '173000.000000',
+        room: {
+          id: 'R3',
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 173000,
+          date_end: 0,
+          thread_root_ts: '173000.000000',
+          channels: ['Cthr'],
+          participant_history: ['UOWNER'],
+        },
+      },
+    });
+    await handlers['event:user_huddle_changed']({
+      event: {
+        user: {
+          id: 'UOWNER',
+          profile: { huddle_state: 'not_in_a_huddle', huddle_state_call_id: 'R3' },
+        },
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 2);
+    const threadAttempt = client.chat.postMessage.mock.calls[0].arguments[0];
+    assert.equal(threadAttempt.channel, 'Cthr');
+    assert.equal(threadAttempt.thread_ts, '173000.000000');
+    const dmFallback = client.chat.postMessage.mock.calls[1].arguments[0];
+    assert.equal(dmFallback.channel, 'UOWNER');
+    assert.equal(dmFallback.blocks.find((block) => block.type === 'actions').elements[0].value, 'R3');
+
+    tracker.stop();
+  });
+
+  it('backfills a running huddle when the bot is added to a channel mid-huddle', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    client.conversations.history = mock.fn(async () => ({
+      messages: [
+        {
+          subtype: 'huddle_thread',
+          channel: 'Chippo',
+          ts: '175000.000000',
+          room: {
+            id: 'Rhippo',
+            call_family: 'huddle',
+            created_by: 'UFRED',
+            date_start: 174900,
+            date_end: 0,
+            thread_root_ts: '175000.000000',
+            channels: ['Chippo'],
+            participant_history: ['UFRED'],
+          },
+        },
+      ],
+    }));
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    await handlers['event:member_joined_channel']({ event: { user: 'BOTUSER', channel: 'Chippo' }, client });
+    await flush();
+
+    assert.equal(client.conversations.history.mock.callCount(), 1);
+    assert.deepEqual(client.conversations.history.mock.calls[0].arguments[0], { channel: 'Chippo', limit: 50 });
+    const huddle = store.getHuddle('Rhippo');
+    assert.equal(huddle.channel_id, 'Chippo');
+    assert.equal(huddle.created_by, 'UFRED');
+    assert.equal(huddle.thread_root_ts, '175000.000000');
+    assert.equal(huddle.status, 'active');
 
     tracker.stop();
   });

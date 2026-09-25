@@ -901,4 +901,38 @@ describe('App Home handlers', () => {
     assert(mainCall.text.includes('Previous question?'));
     store.close();
   });
+
+  it('only lists huddles in channels Asteria is a member of on the huddles tab', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asteria-apphome-'));
+    const databasePath = path.join(tempDir, 'asteria.sqlite');
+    createdPaths.push(databasePath);
+
+    const store = await createStore(databasePath);
+    store.updateSettings({
+      personal_channel_owner_id: 'UOWNER',
+      personal_channel_id: 'C123',
+    });
+
+    store.upsertHuddle({
+      callId: 'R1',
+      channelId: 'C123',
+      startedAt: 1754300000,
+      endedAt: 1754301000,
+    });
+    store.upsertHuddle({
+      callId: 'R2',
+      startedAt: 1754213600,
+    });
+
+    const client = createClient();
+    const handlers = createHandlerTestHarness({ store });
+
+    await handlers.publishTab(client, 'UOWNER', 'huddles');
+
+    const publishArgs = client.views.publish.mock.calls[0].arguments[0];
+    const messageText = publishArgs.view.blocks.filter((block) => block.type === 'section').at(-1).text.text;
+    assert(messageText.includes('<#C123>'));
+    assert(!messageText.includes('unknown channel'));
+    store.close();
+  });
 });

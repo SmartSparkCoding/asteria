@@ -721,7 +721,7 @@ function buildHomeAssistantView({ settings, notice, isOwner, stepsSummary }) {
               block_id: 'home_assistant_token_block',
               label: { type: 'plain_text', text: 'Long-lived access token' },
               element: {
-                type: 'password',
+                type: 'plain_text_input',
                 action_id: 'home_assistant_token',
                 initial_value: settings.home_assistant_token || '',
                 placeholder: { type: 'plain_text', text: 'Long-lived access token' },
@@ -947,7 +947,7 @@ export function buildHuddlesView({ huddles, notice, timezone }) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: 'Huddles Asteria has seen, most recent first. Every ended huddle can generate a review from its DM prompt.',
+          text: 'Huddles from channels Asteria is in, most recent first. Every ended huddle can generate a review from its DM prompt.',
         },
       },
       ...(huddles.length > 0
