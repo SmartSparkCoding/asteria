@@ -368,12 +368,31 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       return;
     }
     await generateReview({ huddle, recipientUserId: body?.user?.id, actionClient });
+    const promptTs = body?.message?.ts;
+    const promptChannelId = body?.container?.channel_id ?? body?.channel?.id;
+    if (promptTs && promptChannelId) {
+      try {
+        await actionClient.chat.update({
+          channel: promptChannelId,
+          ts: promptTs,
+          text: 'Huddle review posted above :arrow_up:',
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: 'Huddle review posted :done_right:',
+              },
+            },
+          ],
+        });
+      } catch (error) {
+        logger.warn?.(`Could not update huddle review prompt for ${callId}`, error);
+      }
+    }
   }
 
   async function generateReview({ huddle, recipientUserId, actionClient }) {
-    if (!recipientUserId) {
-      return;
-    }
     const members = store.listHuddleMembers(huddle.call_id);
     const stats = computeHuddleStats({
       huddle,
@@ -402,6 +421,17 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     const timezone = store.getSettings().timezone || 'UTC';
     const text = formatHuddleReviewMessage(stats, { timezone });
 
+    if (huddle.channel_id && huddle.thread_root_ts) {
+      await actionClient.chat.postMessage({
+        channel: huddle.channel_id,
+        thread_ts: huddle.thread_root_ts,
+        text,
+      });
+      return;
+    }
+    if (!recipientUserId) {
+      return;
+    }
     await actionClient.chat.postMessage({
       channel: recipientUserId,
       text,

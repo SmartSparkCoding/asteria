@@ -401,6 +401,8 @@ describe('huddle tracker integration', () => {
 
     assert.equal(client.chat.postMessage.mock.callCount(), 2);
     const review = client.chat.postMessage.mock.calls[1].arguments[0];
+    assert.equal(review.channel, 'Creview');
+    assert.equal(review.thread_ts, '1000.000000');
     assert(review.text.includes('Huddle review'));
     assert(review.text.includes('#reviews'));
     assert(review.text.includes('<@UOWNER> — 5m *— longest in the huddle*'));
