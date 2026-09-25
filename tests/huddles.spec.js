@@ -659,4 +659,188 @@ describe('huddle tracker integration', () => {
 
     tracker.stop();
   });
+
+  it('replies playfully to a bot mention in a tracked huddle thread', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({
+      callId: 'Ract',
+      channelId: 'Crandom',
+      createdBy: 'UOWNER',
+      startedAt: 172000,
+      endedAt: null,
+      threadRootTs: '172000.000000',
+      participantHistory: ['UOWNER'],
+    });
+
+    handlers.message({
+      message: {
+        type: 'message',
+        subtype: undefined,
+        channel: 'Crandom',
+        user: 'UOWNER',
+        thread_ts: '172000.000000',
+        text: 'hey <@BOTUSER> watch this huddle for me?',
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 1);
+    assert.equal(client.chat.postMessage.mock.calls[0].arguments[0].text, 'silly - im already tracking!!');
+
+    tracker.stop();
+  });
+
+  it('offers to track again when mentioned in an opted-out huddle thread', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({
+      callId: 'Ropt',
+      channelId: 'Crandom',
+      createdBy: 'UOWNER',
+      startedAt: 172000,
+      endedAt: null,
+      threadRootTs: '172000.000000',
+      participantHistory: ['UOWNER'],
+    });
+    store.setHuddleOptedOut('Ropt');
+
+    handlers.message({
+      message: {
+        type: 'message',
+        channel: 'Crandom',
+        user: 'UOWNER',
+        thread_ts: '172000.000000',
+        text: 'hmm okay <@BOTUSER> can you track now?',
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 1);
+    const offer = client.chat.postMessage.mock.calls[0].arguments[0];
+    assert(offer.text.includes('want me to track again'));
+    const button = offer.blocks.find((block) => block.type === 'actions').elements[0];
+    assert.equal(button.action_id, 'huddle_track_again');
+    assert.equal(button.value, 'Ropt');
+    assert.equal(store.getHuddle('Ropt').status, 'opted_out', 'offer alone does not re-enable');
+
+    tracker.stop();
+  });
+
+  it('re-enables tracking when the track-again button is pressed', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({
+      callId: 'Ropt',
+      channelId: 'Crandom',
+      createdBy: 'UOWNER',
+      startedAt: 172000,
+      endedAt: null,
+      threadRootTs: '172000.000000',
+      participantHistory: ['UOWNER'],
+    });
+    store.setHuddleOptedOut('Ropt');
+
+    await handlers['action:huddle_track_again']({
+      ack: mock.fn(),
+      body: {
+        user: { id: 'UOWNER' },
+        actions: [{ value: 'Ropt' }],
+        message: { ts: '172000.000000', thread_ts: '172000.000000' },
+        container: { channel_id: 'Crandom' },
+        channel: { id: 'Crandom' },
+      },
+      client,
+    });
+    await flush();
+
+    assert.equal(store.getHuddle('Ropt').status, 'active');
+    assert.equal(client.chat.postMessage.mock.callCount(), 1);
+    assert.equal(client.chat.postMessage.mock.calls[0].arguments[0].thread_ts, '172000.000000');
+    assert(client.chat.postMessage.mock.calls[0].arguments[0].text.includes('tracking again'));
+
+    tracker.stop();
+  });
+
+  it('tells you the huddle is over when mentioned in an ended huddle thread', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({
+      callId: 'Rend',
+      channelId: 'Crandom',
+      createdBy: 'UOWNER',
+      startedAt: 172000,
+      endedAt: 173000,
+      threadRootTs: '172000.000000',
+      participantHistory: ['UOWNER'],
+    });
+    store.setHuddleStatus('Rend', 'ended', 173000);
+
+    handlers.message({
+      message: {
+        type: 'message',
+        channel: 'Crandom',
+        user: 'UOWNER',
+        thread_ts: '172000.000000',
+        text: '<@BOTUSER> is this over?',
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 1);
+    assert(client.chat.postMessage.mock.calls[0].arguments[0].text.includes('already over'));
+
+    tracker.stop();
+  });
+
+  it('says there is no huddle recorded when mentioned in an unknown thread', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    handlers.message({
+      message: {
+        type: 'message',
+        channel: 'Crandom',
+        user: 'UOWNER',
+        thread_ts: '999999.000000',
+        text: '<@BOTUSER> hi are you here?',
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 1);
+    assert(client.chat.postMessage.mock.calls[0].arguments[0].text.includes('havent got a huddle recorded'));
+
+    tracker.stop();
+  });
+
+  it('ignores messages that do not mention the bot', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    handlers.message({
+      message: {
+        type: 'message',
+        channel: 'Crandom',
+        user: 'UOWNER',
+        thread_ts: '999999.000000',
+        text: 'hello everyone',
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 0);
+
+    tracker.stop();
+  });
 });

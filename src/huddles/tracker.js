@@ -8,6 +8,7 @@ import { nextUserHuddleAction } from './state.js';
 
 const GENERATE_REVIEW_ACTION_ID = 'generate_huddle_review';
 const OPT_OUT_ACTION_ID = 'huddle_opt_out';
+const TRACK_AGAIN_ACTION_ID = 'huddle_track_again';
 const STALE_HUDDLE_SECONDS = 12 * 60 * 60;
 const STALE_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -269,6 +270,87 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     await backfillChannelHuddles(event.channel, eventClient);
   }
 
+  async function handleHuddleMention({ message, channel, client: eventClient }) {
+    const threadTs = message?.thread_ts ?? '';
+    const botUserId = await getBotUserId();
+    if (!threadTs || !botUserId || !message?.text?.includes(`<@${botUserId}>`)) {
+      return;
+    }
+    const replyClient = eventClient ?? client;
+    const postReply = (textOrBlocks) =>
+      replyClient.chat.postMessage({
+        channel: message.channel ?? channel,
+        thread_ts: threadTs,
+        ...(typeof textOrBlocks === 'string' ? { text: textOrBlocks } : textOrBlocks),
+      });
+
+    const huddle = store.listHuddles().find((h) => h.thread_root_ts === threadTs);
+    if (!huddle) {
+      await postReply(
+        "hmm - i havent got a huddle recorded for this thread. are you sure this is a huddle? add me to the channel and i'll catch the next one!",
+      );
+      return;
+    }
+    if (huddle.status === 'active') {
+      await postReply('silly - im already tracking!!');
+      return;
+    }
+    if (huddle.status === 'opted_out') {
+      await postReply({
+        text: 'hii - do you want me to track again?',
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: ':wide_eyes: hii - i stopped tracking this one. do you want me to track again?',
+            },
+          },
+          {
+            type: 'actions',
+            elements: [
+              {
+                type: 'button',
+                action_id: TRACK_AGAIN_ACTION_ID,
+                text: { type: 'plain_text', text: 'Track again' },
+                style: 'primary',
+                value: huddle.call_id,
+              },
+            ],
+          },
+        ],
+      });
+      return;
+    }
+    await postReply("that huddle's already over - nothing to track. @ me again when the next one starts!");
+  }
+
+  async function handleTrackAgain({ ack, body, client: actionClient }) {
+    if (ack) {
+      await ack();
+    }
+    const callId = body?.actions?.[0]?.value;
+    if (!callId) {
+      return;
+    }
+    if (!store.reactivateHuddle(callId)) {
+      return;
+    }
+    const ts = body?.message?.thread_ts || body?.message?.ts;
+    const channelId = body?.container?.channel_id ?? body?.channel?.id;
+    if (ts && channelId) {
+      try {
+        await actionClient.chat.postMessage({
+          channel: channelId,
+          thread_ts: ts,
+          text: 'ok - im tracking again! :green_heart:',
+        });
+      } catch (error) {
+        logger.error(`Failed to confirm huddle tracking for ${callId}`, error);
+      }
+    }
+  }
+
   async function handleGenerateReview({ ack, body, client: actionClient }) {
     if (ack) {
       await ack();
@@ -379,8 +461,14 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     });
   });
 
+  app.action(TRACK_AGAIN_ACTION_ID, (payload) => {
+    void handleTrackAgain(payload).catch((error) => {
+      logger.error('Re-enable huddle tracking', error);
+    });
+  });
+
   app.message((payload) => {
-    const message = payload.message ?? payload;
+    const message = payload.message ?? payload.event ?? payload;
     if (message?.subtype === 'huddle_thread') {
       try {
         handleHuddleThreadMessage(message);
@@ -388,6 +476,13 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
         logger.error('Handle huddle_thread message', error);
       }
     }
+    void handleHuddleMention({
+      message,
+      channel: payload.channel,
+      client: payload.client,
+    }).catch((error) => {
+      logger.error('Handle huddle mention', error);
+    });
   });
 
   app.event('member_joined_channel', (payload) => {
@@ -406,6 +501,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
   return {
     GENERATE_REVIEW_ACTION_ID,
     OPT_OUT_ACTION_ID,
+    TRACK_AGAIN_ACTION_ID,
     stop() {
       clearInterval(sweepTimer);
     },

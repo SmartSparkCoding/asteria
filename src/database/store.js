@@ -1072,6 +1072,22 @@ export async function createStore(databasePath, options = {}) {
       return changes > 0;
     },
 
+    reactivateHuddle(callId) {
+      bindAndRun(
+        database,
+        `
+        UPDATE huddles SET status = 'active', last_seen_at = CURRENT_TIMESTAMP
+        WHERE call_id = $call_id AND status = 'opted_out'
+      `,
+        {
+          $call_id: callId,
+        },
+      );
+      const changes = getRowsChanged(database);
+      persist();
+      return changes > 0;
+    },
+
     listStaleActiveHuddles(beforeStartedAt) {
       return bindAndFetchAll(
         database,
