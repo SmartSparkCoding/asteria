@@ -25,6 +25,59 @@ function nowEpochSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
+const BRNY_USER_ID = 'U09U824EK3P';
+
+const FREDDIE_EMOJIS = {
+  confused: ':freddie-confused:',
+  noGlasses: ':freddie-no-glasses:',
+  notWorking: ':freddie-not-working:',
+  silly: ':freddie-silly:',
+  sleeping: ':freddie-sleeping:',
+  working: ':freddie-working:',
+};
+
+const SIX_SEVEN_JOKES = [
+  'why was 6 afraid of 7? because 7 8 9 😭',
+  'why did 6 break up with 7? because 6 ate 9 💀',
+  'whats 7s favourite food? s7ew 🫠',
+  'why is 7 so good at tennis? it serves 6 🎾',
+  'how does 7 get around? it catches the 6:15 bus 🚌',
+  'what do you call a sick 7? s7niffles 🤧',
+  'why wont 7 drive? the 6 oclock traffic 8s itself 🚦',
+];
+
+function pickRandom(items) {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function formatLongDuration(totalSeconds) {
+  const total = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours === 0) {
+    return `${minutes}m`;
+  }
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h ${minutes}m`;
+}
+
+function buildSillyReply(huddle) {
+  if (huddle) {
+    const duration = huddle.started_at
+      ? formatLongDuration(Math.max(0, nowEpochSeconds() - huddle.started_at))
+      : 'forever';
+    const shame = pickRandom([
+      `omg still in your *${duration}* long huddle. how sad. humans are sad 😭💀`,
+      `still in a huddle after *${duration}*?? go touch grass fr ${FREDDIE_EMOJIS.silly}`,
+      `*${duration}* in a huddle and counting. the clankers have fully taken over :clanker: 💀`,
+    ]);
+    return `${shame}\n\n${pickRandom(SIX_SEVEN_JOKES)}\n\n_(six-seven jokes by <@${BRNY_USER_ID}|brny> :pet-brny:)_`;
+  }
+  return `just a silly lil clanker, minding my own business :clanker: ${FREDDIE_EMOJIS.notWorking}\n\n${pickRandom(SIX_SEVEN_JOKES)}\n\n_(six-seven jokes by <@${BRNY_USER_ID}|brny> :pet-brny:)_`;
+}
+
 /**
  * Wire Asteria into Slack huddles. Presence comes from the workspace-wide
  * `user_huddle_changed` event; room metadata (channel, starter, timestamps,
@@ -40,7 +93,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `:headphones: Your huddle just ended (${formatDuration(duration)}). Want a *huddle review* with stats on attendance and the longest / shortest message in the huddle chat?`,
+            text: `🎧 Your huddle just ended (${formatDuration(duration)}). Want a *huddle review* with stats on attendance and the longest / shortest message in the huddle chat?`,
           },
         },
         {
@@ -67,7 +120,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: ":wavey: Hi! FYI - i'm tracking your huddle for stats! If you'd prefer I didn't, press the button below!",
+            text: "👋 Hi! FYI - i'm tracking your huddle for stats! If you'd prefer I didn't, press the button below!",
           },
         },
         {
@@ -273,37 +326,34 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
   async function handleHuddleMention({ message, channel, client: eventClient }) {
     const threadTs = message?.thread_ts ?? '';
     const botUserId = await getBotUserId();
-    if (!threadTs || !botUserId || !message?.text?.includes(`<@${botUserId}>`)) {
+    if (!threadTs && !botUserId) {
+      return;
+    }
+    if (!botUserId || !message?.text?.includes(`<@${botUserId}>`)) {
       return;
     }
     const replyClient = eventClient ?? client;
     const postReply = (textOrBlocks) =>
       replyClient.chat.postMessage({
         channel: message.channel ?? channel,
-        thread_ts: threadTs,
+        ...{ ...(threadTs ? { thread_ts: threadTs } : {}) },
         ...(typeof textOrBlocks === 'string' ? { text: textOrBlocks } : textOrBlocks),
       });
 
     const huddle = store.listHuddles().find((h) => h.thread_root_ts === threadTs);
-    if (!huddle) {
-      await postReply(
-        "hmm - i havent got a huddle recorded for this thread. are you sure this is a huddle? add me to the channel and i'll catch the next one!",
-      );
+    if (huddle?.status === 'active') {
+      await postReply(buildSillyReply(huddle));
       return;
     }
-    if (huddle.status === 'active') {
-      await postReply('silly - im already tracking!!');
-      return;
-    }
-    if (huddle.status === 'opted_out') {
+    if (huddle?.status === 'opted_out') {
       await postReply({
-        text: 'hii - do you want me to track again?',
+        text: '👀 hii - do you want me to track again?',
         blocks: [
           {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: ':wide_eyes: hii - i stopped tracking this one. do you want me to track again?',
+              text: '👀 hii - i stopped tracking this one. do you want me to track again? :pet-freddie:',
             },
           },
           {
@@ -322,7 +372,12 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       });
       return;
     }
-    await postReply("that huddle's already over - nothing to track. @ me again when the next one starts!");
+    if (huddle && huddle.status !== 'active') {
+      await postReply("that huddle's already over - nothing to track 💀. @ me again when the next one starts!");
+      return;
+    }
+    const trackedHuddle = store.listHuddles().find((h) => h.status === 'active');
+    await postReply(buildSillyReply(trackedHuddle || null));
   }
 
   async function handleTrackAgain({ ack, body, client: actionClient }) {
@@ -343,7 +398,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
         await actionClient.chat.postMessage({
           channel: channelId,
           thread_ts: ts,
-          text: 'ok - im tracking again! :green_heart:',
+          text: 'ok - im tracking again! 💚',
         });
       } catch (error) {
         logger.error(`Failed to confirm huddle tracking for ${callId}`, error);
@@ -375,13 +430,13 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
         await actionClient.chat.update({
           channel: promptChannelId,
           ts: promptTs,
-          text: 'Huddle review posted above :arrow_up:',
+          text: 'Huddle review posted above ⬆️',
           blocks: [
             {
               type: 'section',
               text: {
                 type: 'mrkdwn',
-                text: 'Huddle review posted :done_right:',
+                text: 'Huddle review posted 🫡',
               },
             },
           ],
@@ -462,7 +517,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
               type: 'section',
               text: {
                 type: 'mrkdwn',
-                text: ":no_bell: Okay — I've stopped tracking this huddle. No stats, and no review prompt when it ends.",
+                text: "🔕 Okay — I've stopped tracking this huddle. No stats, and no review prompt when it ends.",
               },
             },
           ],

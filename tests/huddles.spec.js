@@ -690,7 +690,9 @@ describe('huddle tracker integration', () => {
     await flush();
 
     assert.equal(client.chat.postMessage.mock.callCount(), 1);
-    assert.equal(client.chat.postMessage.mock.calls[0].arguments[0].text, 'silly - im already tracking!!');
+    const reply = client.chat.postMessage.mock.calls[0].arguments[0];
+    assert(reply.text.includes('huddle'), 'huddle-shaming reply');
+    assert(reply.text.includes('jokes by'), 'credit line present');
 
     tracker.stop();
   });
@@ -803,7 +805,7 @@ describe('huddle tracker integration', () => {
     tracker.stop();
   });
 
-  it('says there is no huddle recorded when mentioned in an unknown thread', async () => {
+  it('goads with jokes when mentioned in an unknown thread', async () => {
     const store = await createTestStore();
     const client = createBasicClient();
     const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
@@ -820,7 +822,44 @@ describe('huddle tracker integration', () => {
     await flush();
 
     assert.equal(client.chat.postMessage.mock.callCount(), 1);
-    assert(client.chat.postMessage.mock.calls[0].arguments[0].text.includes('havent got a huddle recorded'));
+    const reply = client.chat.postMessage.mock.calls[0].arguments[0];
+    assert.equal(reply.thread_ts, '999999.000000');
+    assert(reply.text.includes('jokes by'), 'silly joke reply');
+
+    tracker.stop();
+  });
+
+  it('shames the active huddle when mentioned in a normal channel', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({
+      callId: 'Ract2',
+      channelId: 'Chuddle',
+      createdBy: 'UOWNER',
+      startedAt: 172000,
+      endedAt: null,
+      threadRootTs: '172000.000000',
+      participantHistory: ['UOWNER'],
+    });
+
+    handlers.message({
+      message: {
+        type: 'message',
+        channel: 'Crandom',
+        user: 'UOWNER',
+        text: '<@BOTUSER> are you tracking?',
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 1);
+    const reply = client.chat.postMessage.mock.calls[0].arguments[0];
+    assert.equal(reply.channel, 'Crandom');
+    assert.equal(reply.thread_ts, undefined, 'no thread_ts for channel message');
+    assert(reply.text.includes('huddle'), 'points at the active huddle');
+    assert(reply.text.includes('jokes by'));
 
     tracker.stop();
   });

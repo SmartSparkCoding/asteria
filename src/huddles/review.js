@@ -114,7 +114,7 @@ export function formatHuddleReviewMessage(stats, { timezone = 'UTC' } = {}) {
   });
 
   const lines = [
-    `:headphones: *Huddle review* — ${channelLabel(stats)}`,
+    `🎧 *Huddle review* — ${channelLabel(stats)}`,
     '',
     `*Started by:* ${stats.createdBy ? `<@${stats.createdBy}>` : 'unknown'} · ${formatTime(stats.startedAt, timezone)}`,
     `*Ended:* ${formatTime(stats.endedAt, timezone)}`,
