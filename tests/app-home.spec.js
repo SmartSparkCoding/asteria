@@ -32,8 +32,8 @@ function createHandlerTestHarness({ store, aiService }) {
     },
     error: mock.fn(),
   };
-  const { publishTab } = createHomeHandlers({ app, store, aiService });
-  return { ...handlers, publishTab };
+  const { publishTab, handleHuddleChannelAction } = createHomeHandlers({ app, store, aiService });
+  return { ...handlers, publishTab, handleHuddleChannelAction };
 }
 
 function createClient() {
@@ -182,7 +182,10 @@ describe('App Home handlers', () => {
     assert.equal(client.chat.postMessage.mock.callCount(), 0);
     const publishArgs = client.views.publish.mock.calls[0].arguments[0];
     assert.equal(publishArgs.view.callback_id, 'asteria_home_leaderboard');
-    assert(!publishArgs.view.blocks.some((block) => block.block_id === 'navigation_tabs'));
+    assert(
+      !publishArgs.view.blocks.some((block) => String(block.block_id || '').startsWith('navigation')),
+      'no navigation at all',
+    );
     store.close();
   });
 
@@ -983,6 +986,42 @@ describe('App Home categories and huddle channel controls', () => {
     store.close();
   });
 
+  it('never repeats a block_id, which Slack rejects with invalid_arguments', async () => {
+    const { store, handlers, client } = await createHarness();
+    store.upsertHuddleChannel({ channelId: 'Crandom', name: 'random', ownerIds: ['UOWNER'] });
+    store.upsertHuddleChannel({ channelId: 'Csecond', name: 'second', ownerIds: ['UOWNER'] });
+
+    const subTabs = [
+      'daily-update',
+      'daily-question',
+      'welcomer',
+      'home-assistant',
+      'sync',
+      'settings',
+      'delete',
+      'huddle-channels',
+      'huddles',
+      'leaderboard',
+      'logs',
+    ];
+    for (const sub of subTabs) {
+      for (const category of ['channels', 'huddles']) {
+        await handlers.publishTab(client, 'UOWNER', category, sub);
+        const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
+        const ids = view.blocks.map((block) => block.block_id).filter(Boolean);
+        const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
+        assert.deepEqual(duplicates, [], `${category}/${sub} repeats a block_id`);
+
+        const actionIds = view.blocks.flatMap((block) =>
+          (block.elements || []).map((element) => element.action_id).filter(Boolean),
+        );
+        const duplicateActions = actionIds.filter((id, index) => actionIds.indexOf(id) !== index);
+        assert.deepEqual(duplicateActions, [], `${category}/${sub} repeats an action_id`);
+      }
+    }
+    store.close();
+  });
+
   it('keeps a random non-owner on the leaderboard with no navigation', async () => {
     const { store, handlers, client } = await createHarness();
 
@@ -990,7 +1029,7 @@ describe('App Home categories and huddle channel controls', () => {
     const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
     assert.equal(view.callback_id, 'asteria_home_leaderboard');
     assert.equal(
-      view.blocks.filter((block) => block.block_id === 'navigation_tabs').length,
+      view.blocks.filter((block) => String(block.block_id || '').startsWith('navigation')).length,
       0,
       'no tabs for someone with nothing to manage',
     );
@@ -1022,12 +1061,12 @@ describe('App Home categories and huddle channel controls', () => {
     await handlers.publishTab(client, 'UOWNER', 'huddles', 'huddle-channels');
     const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
     const actionIds = view.blocks.flatMap((block) => (block.elements || []).map((element) => element.action_id));
-    assert(actionIds.includes('huddle_channel_configure'));
-    assert(actionIds.includes('huddle_channel_toggle_tracking'));
-    assert(actionIds.includes('huddle_channel_toggle_auto_replies'));
-    assert(actionIds.includes('huddle_channel_toggle_restrict'));
-    assert(actionIds.includes('huddle_channel_pause'));
-    assert(actionIds.includes('huddle_channel_resume') === false, 'no resume button while not paused');
+    assert(actionIds.includes('huddle_channel_configure_Crandom'));
+    assert(actionIds.includes('huddle_channel_toggle_tracking_Crandom'));
+    assert(actionIds.includes('huddle_channel_toggle_auto_replies_Crandom'));
+    assert(actionIds.includes('huddle_channel_toggle_restrict_Crandom'));
+    assert(actionIds.includes('huddle_channel_pause_Crandom_15'));
+    assert(!actionIds.some((id) => id.startsWith('huddle_channel_resume')), 'no resume while not paused');
 
     const viewText = JSON.stringify(view);
     assert(viewText.includes('channel owner(s): <@UOWNER>'), 'shows who owns the channel');
@@ -1039,35 +1078,35 @@ describe('App Home categories and huddle channel controls', () => {
     const { store, handlers, client } = await createHarness();
     store.upsertHuddleChannel({ channelId: 'Crandom', ownerIds: ['UOWNER'] });
 
-    await handlers['action:huddle_channel_toggle_tracking']({
+    await handlers.handleHuddleChannelAction('toggle_tracking', {
       ack: mock.fn(),
       body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom' }] },
       client,
     });
     assert.equal(store.getHuddleChannel('Crandom').enabled, 0, 'tracking off');
 
-    await handlers['action:huddle_channel_toggle_auto_replies']({
+    await handlers.handleHuddleChannelAction('toggle_auto_replies', {
       ack: mock.fn(),
       body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom' }] },
       client,
     });
     assert.equal(store.getHuddleChannel('Crandom').auto_replies, 0, 'replies off');
 
-    await handlers['action:huddle_channel_toggle_restrict']({
+    await handlers.handleHuddleChannelAction('toggle_restrict', {
       ack: mock.fn(),
       body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom' }] },
       client,
     });
     assert.equal(store.getHuddleChannel('Crandom').restrict_triggers, 1, 'owners only');
 
-    await handlers['action:huddle_channel_pause']({
+    await handlers.handleHuddleChannelAction('pause', {
       ack: mock.fn(),
       body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom:60' }] },
       client,
     });
     assert(store.getHuddleChannel('Crandom').paused_until > Math.floor(Date.now() / 1000), 'paused for an hour');
 
-    await handlers['action:huddle_channel_resume']({
+    await handlers.handleHuddleChannelAction('resume', {
       ack: mock.fn(),
       body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom' }] },
       client,
@@ -1091,21 +1130,21 @@ describe('App Home categories and huddle channel controls', () => {
     store.upsertHuddleChannel({ channelId: 'Cmine', ownerIds: ['UOTHER'] });
     store.upsertHuddleChannel({ channelId: 'Ctheirs', ownerIds: ['USOMEONE'] });
 
-    await handlers['action:huddle_channel_toggle_tracking']({
+    await handlers.handleHuddleChannelAction('toggle_tracking', {
       ack: mock.fn(),
       body: { user: { id: 'UOTHER' }, actions: [{ value: 'Cmine' }] },
       client,
     });
     assert.equal(store.getHuddleChannel('Cmine').enabled, 0, 'a channel owner can pause their own tracking');
 
-    await handlers['action:huddle_channel_toggle_tracking']({
+    await handlers.handleHuddleChannelAction('toggle_tracking', {
       ack: mock.fn(),
       body: { user: { id: 'UOTHER' }, actions: [{ value: 'Ctheirs' }] },
       client,
     });
     assert.equal(store.getHuddleChannel('Ctheirs').enabled, 1, 'but not touch a channel they do not own');
 
-    await handlers['action:huddle_channel_toggle_tracking']({
+    await handlers.handleHuddleChannelAction('toggle_tracking', {
       ack: mock.fn(),
       body: { user: { id: 'USTRANGER' }, actions: [{ value: 'Cmine' }] },
       client,
@@ -1172,7 +1211,7 @@ describe('App Home categories and huddle channel controls', () => {
     const { store, handlers, client } = await createHarness();
     store.upsertHuddleChannel({ channelId: 'Cmine', ownerIds: ['UOTHER'], autoReplies: false });
 
-    await handlers['action:huddle_channel_configure']({
+    await handlers.handleHuddleChannelAction('configure', {
       ack: mock.fn(),
       body: { user: { id: 'UOTHER' }, actions: [{ value: 'Cmine' }], trigger_id: 'T1' },
       client,
@@ -1185,7 +1224,7 @@ describe('App Home categories and huddle channel controls', () => {
     assert(modalText.includes('owners'), 'can restrict triggers to owners');
 
     const modalsBefore = client.views.open.mock.callCount();
-    await handlers['action:huddle_channel_configure']({
+    await handlers.handleHuddleChannelAction('configure', {
       ack: mock.fn(),
       body: { user: { id: 'USTRANGER' }, actions: [{ value: 'Cmine' }], trigger_id: 'T2' },
       client,

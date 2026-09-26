@@ -55,6 +55,27 @@ function parseOwnerIdList(value) {
   return [...new Set(found)];
 }
 
+const HUDDLE_CHANNEL_OPS = [
+  'configure',
+  'toggle_tracking',
+  'toggle_auto_replies',
+  'toggle_restrict',
+  'pause',
+  'resume',
+];
+
+/**
+ * Per-channel huddle controls suffix their action_id with the channel (and pause
+ * duration), because Slack rejects a view that repeats an action_id. The channel
+ * itself travels in the button value.
+ */
+const HUDDLE_CHANNEL_ACTION_PATTERN = new RegExp(`^huddle_channel_(?:${HUDDLE_CHANNEL_OPS.join('|')})(?:_[A-Z0-9]+)*$`);
+
+function huddleChannelOpFromActionId(actionId) {
+  const rest = String(actionId ?? '').replace(/^huddle_channel_/, '');
+  return HUDDLE_CHANNEL_OPS.find((op) => rest === op || rest.startsWith(`${op}_`)) ?? '';
+}
+
 function getConversationSelectValue(viewState, blockId, actionId) {
   return viewState?.[blockId]?.[actionId]?.selected_conversation ?? '';
 }
@@ -339,6 +360,23 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       channelId,
       mutate: () => store.setHuddleChannelFlag(channelId, 'paused_until', 0),
     });
+  }
+
+  const HUDDLE_CHANNEL_HANDLERS = {
+    configure: handleOpenHuddleChannelConfig,
+    toggle_tracking: handleToggleTracking,
+    toggle_auto_replies: handleToggleAutoReplies,
+    toggle_restrict: handleToggleRestrict,
+    pause: handlePauseChannel,
+    resume: handleResumeChannel,
+  };
+
+  async function handleHuddleChannelAction(op, payload) {
+    const handler = HUDDLE_CHANNEL_HANDLERS[op];
+    if (!handler) {
+      return undefined;
+    }
+    return handler(payload);
   }
 
   async function handleOpenHuddleChannelConfig({ ack, body, client }) {
@@ -1188,12 +1226,9 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     });
   }
 
-  app.action('huddle_channel_configure', handleOpenHuddleChannelConfig);
-  app.action('huddle_channel_toggle_tracking', handleToggleTracking);
-  app.action('huddle_channel_toggle_auto_replies', handleToggleAutoReplies);
-  app.action('huddle_channel_toggle_restrict', handleToggleRestrict);
-  app.action('huddle_channel_pause', handlePauseChannel);
-  app.action('huddle_channel_resume', handleResumeChannel);
+  app.action(HUDDLE_CHANNEL_ACTION_PATTERN, (payload) =>
+    handleHuddleChannelAction(huddleChannelOpFromActionId(payload?.body?.actions?.[0]?.action_id), payload),
+  );
   app.view('huddle_channel_config_submit', handleHuddleChannelConfigSubmit);
   app.action('delete_message_submit', handleDeleteMessageSubmit);
   app.action('open_daily_update_modal', handleOpenDailyUpdateModal);
@@ -1222,5 +1257,6 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
 
   return {
     publishTab,
+    handleHuddleChannelAction,
   };
 }

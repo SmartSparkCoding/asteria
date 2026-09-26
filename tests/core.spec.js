@@ -73,7 +73,7 @@ describe('Asteria core helpers', () => {
     assert.equal(view.type, 'home');
     assert.equal(view.callback_id, 'asteria_home_leaderboard');
     assert(view.blocks.some((block) => block.type === 'section' && block.text?.text.includes('<@UFRED> · *42 pts*')));
-    assert(!view.blocks.some((block) => block.block_id === 'navigation_tabs'));
+    assert(!view.blocks.some((block) => String(block.block_id || '').startsWith('navigation')));
   });
 
   it('parses Slack message permalinks into channel and ts', () => {

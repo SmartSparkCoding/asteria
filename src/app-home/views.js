@@ -44,10 +44,10 @@ export function defaultSubFor(category, isAppOwner) {
   return isAppOwner ? 'daily-update' : 'leaderboard';
 }
 
-function buildActionRow(buttons) {
+function buildActionRow(buttons, blockId) {
   return {
     type: 'actions',
-    block_id: 'navigation_tabs',
+    block_id: blockId,
     elements: buttons,
   };
 }
@@ -72,6 +72,7 @@ export function buildNavigationBlocks({ category, sub, isAppOwner, isChannelOwne
         value: entry.id,
         ...(entry.id === activeCategory ? { style: 'primary' } : {}),
       })),
+      'navigation_categories',
     ),
   ];
   if (subs.length > 1) {
@@ -84,6 +85,7 @@ export function buildNavigationBlocks({ category, sub, isAppOwner, isChannelOwne
           value: `${activeCategory}/${entry.id}`,
           ...(entry.id === sub ? { style: 'primary' } : {}),
         })),
+        'navigation_subs',
       ),
     );
   }
@@ -1072,28 +1074,30 @@ function describeHuddleChannel(channel, now) {
 function buildHuddleChannelBlocks(channel, now) {
   const paused = (Number(channel.pausedUntil) || 0) > now;
   const value = channel.channelId;
+  // action_ids must be unique across the whole view, so every control is suffixed
+  // with the channel it belongs to. The channel itself travels in `value`.
   const mainButtons = [
     {
       type: 'button',
-      action_id: `${HuddleChannelActionPrefix}configure`,
+      action_id: `${HuddleChannelActionPrefix}configure_${value}`,
       text: { type: 'plain_text', text: 'Configure' },
       value,
     },
     {
       type: 'button',
-      action_id: `${HuddleChannelActionPrefix}toggle_tracking`,
+      action_id: `${HuddleChannelActionPrefix}toggle_tracking_${value}`,
       text: { type: 'plain_text', text: channel.enabled ? 'Tracking: on' : 'Tracking: off' },
       value,
     },
     {
       type: 'button',
-      action_id: `${HuddleChannelActionPrefix}toggle_auto_replies`,
+      action_id: `${HuddleChannelActionPrefix}toggle_auto_replies_${value}`,
       text: { type: 'plain_text', text: channel.autoReplies ? 'Replies: on' : 'Replies: off' },
       value,
     },
     {
       type: 'button',
-      action_id: `${HuddleChannelActionPrefix}toggle_restrict`,
+      action_id: `${HuddleChannelActionPrefix}toggle_restrict_${value}`,
       text: { type: 'plain_text', text: channel.restrictTriggers ? 'Owners only: on' : 'Owners only: off' },
       value,
     },
@@ -1102,7 +1106,7 @@ function buildHuddleChannelBlocks(channel, now) {
     ? [
         {
           type: 'button',
-          action_id: `${HuddleChannelActionPrefix}resume`,
+          action_id: `${HuddleChannelActionPrefix}resume_${value}`,
           text: { type: 'plain_text', text: 'Resume now' },
           value,
           style: 'primary',
@@ -1110,7 +1114,7 @@ function buildHuddleChannelBlocks(channel, now) {
       ]
     : [15, 60, 240, 1440].map((minutes) => ({
         type: 'button',
-        action_id: `${HuddleChannelActionPrefix}pause`,
+        action_id: `${HuddleChannelActionPrefix}pause_${value}_${minutes}`,
         text: {
           type: 'plain_text',
           text: minutes >= 1440 ? 'Pause 1 day' : `Pause ${minutes >= 60 ? `${minutes / 60}h` : `${minutes}m`}`,
@@ -1125,8 +1129,8 @@ function buildHuddleChannelBlocks(channel, now) {
         text: `*<#${channel.channelId}>*${channel.name ? ` · _${channel.name}_` : ''}\n${describeHuddleChannel(channel, now)}`,
       },
     },
-    buildActionRow(mainButtons),
-    buildActionRow(pauseButtons),
+    buildActionRow(mainButtons, `huddle_channel_actions_${channel.channelId}`),
+    buildActionRow(pauseButtons, `huddle_channel_pause_${channel.channelId}`),
   ];
 }
 
