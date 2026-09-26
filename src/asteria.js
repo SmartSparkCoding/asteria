@@ -1,10 +1,13 @@
 import { App, LogLevel } from '@slack/bolt';
 import { createHomeHandlers } from './app-home/handlers.js';
+import { createChannelPermissions } from './app-home/permissions.js';
 import { loadEnvironment } from './config/env.js';
 import { createStore } from './database/store.js';
+import { registerDmDeleteByLink } from './dm/delete-by-link.js';
 import { createHuddleTracker } from './huddles/tracker.js';
 import { createScheduler } from './scheduler.js';
 import { createHackClubAiService } from './services/ai.js';
+import { createBotChannelDirectory } from './services/bot-channels.js';
 import { createTodoistSync } from './sync/todoist-sync.js';
 import { createWebhookServer } from './sync/webhook-server.js';
 
@@ -54,12 +57,25 @@ export async function createAsteriaRuntime() {
     environment,
   });
 
+  const botChannels = createBotChannelDirectory({ client: app.client, logger });
+  const permissions = createChannelPermissions({ store });
+
   createHomeHandlers({
     app,
     store,
     aiService,
     environment,
     scheduler,
+    botChannels,
+    permissions,
+  });
+
+  registerDmDeleteByLink({
+    app,
+    store,
+    client: app.client,
+    logger,
+    permissions,
   });
 
   const huddleTracker = createHuddleTracker({
@@ -67,6 +83,7 @@ export async function createAsteriaRuntime() {
     store,
     client: app.client,
     logger,
+    botChannels,
     ownerId: store.getSettings().personal_channel_owner_id || environment.personalChannelOwnerId,
   });
 

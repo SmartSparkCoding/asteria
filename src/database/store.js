@@ -352,6 +352,14 @@ export async function createStore(databasePath, options = {}) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS huddle_channel_points (
+      channel_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      points INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (channel_id, user_id)
+    );
+
     CREATE TABLE IF NOT EXISTS huddle_channels (
       channel_id TEXT PRIMARY KEY,
       name TEXT NOT NULL DEFAULT '',
@@ -1163,7 +1171,8 @@ export async function createStore(databasePath, options = {}) {
       persist();
     },
 
-    awardHuddlePoints(userId, points) {
+    awardHuddlePoints(userId, points, channelId = '') {
+      const award = Math.max(0, Math.floor(points));
       bindAndRun(
         database,
         `
@@ -1175,13 +1184,53 @@ export async function createStore(databasePath, options = {}) {
       `,
         {
           $user_id: userId,
-          $points: Math.max(0, Math.floor(points)),
+          $points: award,
         },
       );
+      // Attributed copy, so the leaderboard can be scoped to the channels the bot is in.
+      if (channelId) {
+        bindAndRun(
+          database,
+          `
+          INSERT INTO huddle_channel_points (channel_id, user_id, points, updated_at)
+          VALUES ($channel_id, $user_id, $points, CURRENT_TIMESTAMP)
+          ON CONFLICT(channel_id, user_id) DO UPDATE SET
+            points = huddle_channel_points.points + excluded.points,
+            updated_at = CURRENT_TIMESTAMP
+        `,
+          {
+            $channel_id: channelId,
+            $user_id: userId,
+            $points: award,
+          },
+        );
+      }
       persist();
     },
 
-    listHuddleLeaderboard(limit = 50) {
+    listHuddleLeaderboard(limit = 50, channelIds = null) {
+      if (Array.isArray(channelIds)) {
+        if (channelIds.length === 0) {
+          return [];
+        }
+        const placeholders = channelIds.map((_, index) => `$channel_${index}`).join(', ');
+        const params = { $limit: Math.max(1, Math.min(100, limit)) };
+        channelIds.forEach((channelId, index) => {
+          params[`$channel_${index}`] = channelId;
+        });
+        return bindAndFetchAll(
+          database,
+          `
+          SELECT user_id, SUM(points) AS points FROM huddle_channel_points
+          WHERE channel_id IN (${placeholders})
+          GROUP BY user_id
+          ORDER BY points DESC, updated_at ASC, user_id ASC
+          LIMIT $limit
+        `,
+          params,
+        );
+      }
+
       return bindAndFetchAll(
         database,
         `

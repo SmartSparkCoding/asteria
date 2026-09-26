@@ -105,7 +105,7 @@ function buildSillyReply(huddle) {
  * thread) comes from `huddle_thread` messages. When a huddle ends the starter
  * is DMed for an optional huddle review.
  */
-export function createHuddleTracker({ app, store, client, logger, ownerId = '' }) {
+export function createHuddleTracker({ app, store, client, logger, ownerId = '', botChannels }) {
   function buildReviewPrompt(callId, duration) {
     return {
       text: 'Your huddle just ended. Want a huddle review?',
@@ -273,6 +273,19 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     if (!huddle?.started_at || !huddle?.ended_at) {
       return;
     }
+    // Huddles we happen to observe in channels the bot was never in must not reach
+    // the leaderboard. Channel-less huddles are DMs with the bot, so they always count.
+    if (huddle.channel_id && botChannels) {
+      const channelIds = await botChannels.list();
+      if (!channelIds.includes(huddle.channel_id)) {
+        if (channelIds.length === 0) {
+          logger.error(`Could not verify which channels the bot is in; skipping points for huddle ${huddle.call_id}`);
+        } else {
+          logger.info(`Skipping points for huddle ${huddle.call_id}: the bot is not in ${huddle.channel_id}`);
+        }
+        return;
+      }
+    }
     const members = store.listHuddleMembers(huddle.call_id);
     if (members.length === 0) {
       return;
@@ -299,7 +312,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       messageStats,
     });
     for (const [userId, entry] of awards) {
-      store.awardHuddlePoints(userId, entry.points);
+      store.awardHuddlePoints(userId, entry.points, huddle.channel_id || '');
     }
   }
 

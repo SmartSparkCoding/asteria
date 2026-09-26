@@ -15,7 +15,7 @@ afterEach(() => {
   createdPaths = [];
 });
 
-function createHandlerTestHarness({ store, aiService }) {
+function createHandlerTestHarness({ store, aiService, botChannelIds = ['Crandom', 'Csecond'] }) {
   const handlers = {};
   const app = {
     action: (actionId, handler) => {
@@ -32,8 +32,14 @@ function createHandlerTestHarness({ store, aiService }) {
     },
     error: mock.fn(),
   };
-  const { publishTab, handleHuddleChannelAction } = createHomeHandlers({ app, store, aiService });
-  return { ...handlers, publishTab, handleHuddleChannelAction };
+  const botChannels = { list: mock.fn(async () => botChannelIds) };
+  const { publishTab, handleHuddleChannelAction } = createHomeHandlers({
+    app,
+    store,
+    aiService,
+    botChannels,
+  });
+  return { ...handlers, publishTab, handleHuddleChannelAction, botChannels };
 }
 
 function createClient() {
@@ -937,13 +943,17 @@ describe('App Home handlers', () => {
 });
 
 describe('App Home categories and huddle channel controls', () => {
-  async function createHarness({ ownerId = 'UOWNER' } = {}) {
+  async function createHarness({ ownerId = 'UOWNER', botChannelIds = ['Crandom', 'Csecond'] } = {}) {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asteria-categories-'));
     const databasePath = path.join(tempDir, 'asteria.sqlite');
     createdPaths.push(databasePath);
     const store = await createStore(databasePath);
     store.updateSettings({ personal_channel_owner_id: ownerId, timezone: 'UTC' });
-    return { store, handlers: createHandlerTestHarness({ store }), client: createClient() };
+    return {
+      store,
+      handlers: createHandlerTestHarness({ store, botChannelIds }),
+      client: createClient(),
+    };
   }
 
   function buttonLabels(blocks) {
@@ -1020,6 +1030,74 @@ describe('App Home categories and huddle channel controls', () => {
       }
     }
     store.close();
+  });
+
+  it('scopes the logs tab to the channels the bot is actually in', async () => {
+    const { store, handlers, client } = await createHarness();
+    const owner = store.getSettings().personal_channel_owner_id;
+    store.recordTriggerLog({ userId: 'U1', action: 'huddle_join', detail: 'Rin', channelId: 'Crandom' });
+    store.recordTriggerLog({ userId: 'U2', action: 'huddle_join', detail: 'Rout', channelId: 'Celsewhere' });
+
+    await handlers.publishTab(client, owner, 'huddles', 'logs');
+    const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
+    const text = JSON.stringify(view);
+
+    assert(text.includes('Rin'), 'shows the huddle in a channel the bot is in');
+    assert(!text.includes('Rout'), 'hides the huddle in a channel the bot is not in');
+    assert(!text.includes('U2'), 'hides the person from that channel');
+    store.close();
+  });
+
+  it('shows no logs at all when the bot memberships cannot be verified', async () => {
+    const { store, handlers, client } = await createHarness({ botChannelIds: [] });
+    const owner = store.getSettings().personal_channel_owner_id;
+    store.recordTriggerLog({ userId: 'U1', action: 'huddle_join', detail: 'Rin', channelId: 'Crandom' });
+
+    await handlers.publishTab(client, owner, 'huddles', 'logs');
+    const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
+
+    assert(!JSON.stringify(view).includes('Rin'), 'never falls back to every channel we know');
+    store.close();
+  });
+
+  it('keeps the leaderboard to points earned in the bot channels', async () => {
+    const { store, handlers, client } = await createHarness();
+    const owner = store.getSettings().personal_channel_owner_id;
+    store.awardHuddlePoints('Ubotchannel', 30, 'Crandom');
+    store.awardHuddlePoints('Ubotchannel', 5, 'Csecond');
+    store.awardHuddlePoints('Uelsewhere', 99, 'Celsewhere');
+
+    await handlers.publishTab(client, owner, 'huddles', 'leaderboard');
+    const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
+    const text = JSON.stringify(view);
+
+    assert(text.includes('Ubotchannel'), 'shows players from the bot channels');
+    assert(text.includes('35'), 'sums their points across the bot channels');
+    assert(!text.includes('Uelsewhere'), 'hides players who only show up elsewhere');
+    store.close();
+  });
+
+  it('gives a random non-owner the leaderboard scoped to the bot channels', async () => {
+    const { store, handlers, client } = await createHarness();
+    store.awardHuddlePoints('Ubotchannel', 30, 'Crandom');
+    store.awardHuddlePoints('Uelsewhere', 99, 'Celsewhere');
+
+    await handlers.publishTab(client, 'USTRANGER', 'huddles', 'leaderboard');
+    const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
+    const text = JSON.stringify(view);
+
+    assert(text.includes('Ubotchannel'), 'non-owners still get a leaderboard');
+    assert(!text.includes('Uelsewhere'), 'but only for the channels the bot is in');
+    store.close();
+  });
+
+  it('explains an empty leaderboard when the bot memberships cannot be checked', async () => {
+    const { handlers, client } = await createHarness({ botChannelIds: [] });
+
+    await handlers.publishTab(client, 'UOWNER', 'huddles', 'leaderboard');
+    const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
+
+    assert(JSON.stringify(view).includes("couldn't check which channels I'm in"), 'says why it is empty');
   });
 
   it('keeps a random non-owner on the leaderboard with no navigation', async () => {

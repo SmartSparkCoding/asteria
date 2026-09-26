@@ -32,7 +32,7 @@ async function createTestStore() {
   return createStore(databasePath);
 }
 
-function createTrackerHarness({ store, client, ownerId }) {
+function createTrackerHarness({ store, client, ownerId, botChannelIds }) {
   const handlers = {};
   const app = {
     event: (eventName, handler) => {
@@ -50,8 +50,9 @@ function createTrackerHarness({ store, client, ownerId }) {
     app,
     store,
     client,
-    logger: { error: mock.fn() },
+    logger: { error: mock.fn(), info: mock.fn() },
     ownerId,
+    botChannels: botChannelIds ? { list: mock.fn(async () => botChannelIds) } : undefined,
   });
   return { handlers, tracker };
 }
@@ -1165,8 +1166,54 @@ describe('huddle tracker integration', () => {
     assert(ownerRow, 'the starter appears on the leaderboard');
     assert(ownerRow.points >= 5, 'at least the starter bonus');
     assert(
+      store.listHuddleLeaderboard(50, ['Crandom']).some((row) => row.user_id === 'UOWNER'),
+      'the award is attributed to the channel it happened in',
+    );
+    assert.deepEqual(store.listHuddleLeaderboard(50, ['Cbot']), [], 'and is not attributed to any other channel');
+    assert(
       store.listTriggerLog().some((entry) => entry.action === 'huddle_join'),
       'logs joins',
+    );
+
+    tracker.stop();
+  });
+
+  it('never awards leaderboard points for a channel the bot is not in', async () => {
+    const store = await createTestStore();
+    const { handlers, tracker } = createTrackerHarness({
+      store,
+      client: createBasicClient(),
+      ownerId: 'UOWNER',
+      botChannelIds: ['Cbot'],
+    });
+
+    await handlers['event:user_huddle_changed']({
+      event: { user: { id: 'U9', profile: { huddle_state: 'in_a_huddle', huddle_state_call_id: 'Rout' } } },
+    });
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        channel: 'Celsewhere',
+        ts: '180000.000000',
+        room: {
+          id: 'Rout',
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 172000,
+          date_end: 180000,
+          thread_root_ts: '172000.000000',
+          channels: ['Celsewhere'],
+          participant_history: ['UOWNER', 'U9'],
+        },
+      },
+    });
+    await flush();
+
+    assert.deepEqual(store.listHuddleLeaderboard(), [], 'no points for a channel the bot is not in');
+    assert.deepEqual(
+      store.listHuddleLeaderboard(50, ['Cbot']),
+      [],
+      'and nothing attributed to the bot channels either',
     );
 
     tracker.stop();

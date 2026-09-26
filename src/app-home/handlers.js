@@ -21,6 +21,7 @@ import {
   buildThreadMessageModal,
   buildWelcomeMessageModal,
 } from './modals.js';
+import { createChannelPermissions, parseOwnerIdList } from './permissions.js';
 import { buildHomeView } from './views.js';
 
 function getInputValue(viewState, blockId, actionId) {
@@ -41,18 +42,6 @@ function getCheckboxEnabled(viewState, blockId, actionId) {
 
 function getStaticSelectValue(viewState, blockId, actionId) {
   return viewState?.[blockId]?.[actionId]?.selected_option?.value ?? '';
-}
-
-const SLACK_USER_ID_PATTERN = /^[UW][0-9A-Z]{2,}$/;
-
-/** Accepts "U123, U456", "<@U123>", whitespace — keeps only plausible Slack IDs, in order. */
-function parseOwnerIdList(value) {
-  if (Array.isArray(value)) {
-    return [...new Set(value.filter((id) => typeof id === 'string' && SLACK_USER_ID_PATTERN.test(id)))];
-  }
-  const text = typeof value === 'string' ? value : '';
-  const found = text.match(/[UW][0-9A-Z]{2,}/g) || [];
-  return [...new Set(found)];
 }
 
 const HUDDLE_CHANNEL_OPS = [
@@ -94,69 +83,31 @@ async function openModal(client, triggerId, view) {
   });
 }
 
-export function createHomeHandlers({ app, store, aiService, environment, scheduler }) {
+export function createHomeHandlers({
+  app,
+  store,
+  aiService,
+  environment,
+  scheduler,
+  botChannels,
+  permissions = createChannelPermissions({ store }),
+}) {
+  const { isOwner, isChannelOwner, mayConfigureChannel } = permissions;
   const homeAssistantService = createHomeAssistantService({
     getSettings: () => store.getSettings(),
     logger: app.logger,
   });
 
-  let botChannelIdsCache = { ids: [], fetchedAt: 0 };
-  const BOT_CHANNEL_CACHE_MS = 5 * 60 * 1000;
-
   /**
-   * The channels the bot itself is a member of. Huddle events are workspace-wide, so the
-   * Logs tab is filtered down to these. Falls back to channels we have seen huddles in.
+   * Logs and the leaderboard only ever cover the channels the bot is in. If that
+   * cannot be verified we show nothing rather than every channel we have a huddle in.
    */
-  async function listBotChannelIds(client) {
-    const now = Date.now();
-    if (botChannelIdsCache.ids.length > 0 && now - botChannelIdsCache.fetchedAt < BOT_CHANNEL_CACHE_MS) {
-      return botChannelIdsCache.ids;
+  async function botChannelScope(client) {
+    if (!botChannels) {
+      return { ids: [], verified: false };
     }
-    let ids = [];
-    try {
-      let cursor = '';
-      do {
-        const page = await client.conversations.list({
-          types: 'public_channel,private_channel',
-          exclude_archived: true,
-          limit: 200,
-          ...(cursor ? { cursor } : {}),
-        });
-        for (const conversation of page?.channels || []) {
-          if (conversation.is_member) {
-            ids.push(conversation.id);
-          }
-        }
-        cursor = page?.response_metadata?.next_cursor || '';
-      } while (cursor);
-    } catch {
-      ids = [];
-    }
-    if (ids.length === 0) {
-      ids = store.listHuddleChannelIds();
-    }
-    botChannelIdsCache = { ids, fetchedAt: now };
-    return ids;
-  }
-
-  function configuredChannelOwnerIds() {
-    return new Set(
-      store
-        .listHuddleChannels()
-        .flatMap((row) => (typeof row.owner_ids === 'string' ? parseOwnerIdList(row.owner_ids) : row.owner_ids || [])),
-    );
-  }
-
-  function isChannelOwner(userId) {
-    return configuredChannelOwnerIds().has(userId);
-  }
-
-  function mayConfigureChannel(userId, channelId) {
-    if (isOwner(userId)) {
-      return true;
-    }
-    const owners = parseOwnerIdList(store.getHuddleChannel(channelId)?.owner_ids);
-    return owners.includes(userId);
+    const ids = await botChannels.list();
+    return { ids, verified: ids.length > 0 };
   }
 
   function visibleHuddleChannels(userId) {
@@ -191,13 +142,16 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       .listHuddles()
       .filter((huddle) => huddle.channel_id && huddle.status !== 'opted_out')
       .slice(0, 10);
-    const leaderboard = store.listHuddleLeaderboard(20);
     const isOwnerUser = userId === settings.personal_channel_owner_id;
     const isChannelOwnerUser = !isOwnerUser && isChannelOwner(userId);
-    const logs =
-      isOwnerUser && category === 'huddles' && sub === 'logs'
-        ? store.listTriggerLog(30, await listBotChannelIds(client))
-        : [];
+    // Everyone sees the same leaderboard, scoped to the channels the bot is in.
+    const scope = await botChannelScope(client);
+    const leaderboard = store.listHuddleLeaderboard(20, scope.ids);
+    const logs = isOwnerUser && category === 'huddles' && sub === 'logs' ? store.listTriggerLog(30, scope.ids) : [];
+    const scopeNotice =
+      !scope.verified && !notice && (sub === 'leaderboard' || sub === 'logs')
+        ? "I couldn't check which channels I'm in, so this is empty for now. Try again in a moment."
+        : notice;
     const huddleChannels = isOwnerUser || isChannelOwnerUser ? visibleHuddleChannels(userId) : [];
 
     await publishHome(
@@ -211,7 +165,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
         draft,
         questionPreview,
         recentQuestions,
-        notice,
+        notice: scopeNotice,
         huddles,
         huddleChannels,
         leaderboard,
@@ -220,10 +174,6 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
         isChannelOwner: isChannelOwnerUser,
       }),
     );
-  }
-
-  function isOwner(userId) {
-    return userId === store.getSettings().personal_channel_owner_id;
   }
 
   async function handleNavigation(category, sub, { ack, body, client }) {
