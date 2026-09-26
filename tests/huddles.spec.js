@@ -1217,3 +1217,250 @@ describe('huddle tracker integration', () => {
     assert(awards.get('U1').reasons.includes('started the huddle'));
   });
 });
+
+describe('huddle channel configuration', () => {
+  function huddleThreadMessage({ channel, callId = 'R1', ended = false }) {
+    return {
+      message: {
+        subtype: 'huddle_thread',
+        channel,
+        ts: '172000.000000',
+        room: {
+          id: callId,
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 172000,
+          date_end: ended ? 172600 : 0,
+          thread_root_ts: '172000.000000',
+          channels: [channel],
+          participant_history: ['UOWNER'],
+        },
+      },
+    };
+  }
+
+  it('stores, reads back and flags huddle channel settings', async () => {
+    const store = await createTestStore();
+
+    store.upsertHuddleChannel({
+      channelId: 'Crandom',
+      name: 'random',
+      enabled: true,
+      autoReplies: false,
+      restrictTriggers: true,
+      ownerIds: ['UOWNER', 'U2'],
+      pausedUntil: 1800,
+    });
+
+    const row = store.getHuddleChannel('Crandom');
+    assert.equal(row.name, 'random');
+    assert.equal(row.enabled, 1);
+    assert.equal(row.auto_replies, 0);
+    assert.equal(row.restrict_triggers, 1);
+    assert.equal(row.paused_until, 1800);
+    assert.deepEqual(store.getHuddleChannel('Crandom').owner_ids ? JSON.parse(row.owner_ids) : null, ['UOWNER', 'U2']);
+    assert.equal(store.getHuddleChannel('Cmissing'), null);
+
+    assert.equal(store.setHuddleChannelFlag('Crandom', 'enabled', false), true);
+    assert.equal(store.getHuddleChannel('Crandom').enabled, 0);
+    assert.equal(store.setHuddleChannelFlag('Crandom', 'paused_until', 0), true);
+    assert.equal(store.getHuddleChannel('Crandom').paused_until, 0);
+    assert.equal(store.setHuddleChannelFlag('Crandom', 'nonsense', 1), false, 'rejects unknown fields');
+  });
+
+  it('lists configured channels plus channels we have seen huddles in', async () => {
+    const store = await createTestStore();
+
+    store.upsertHuddle({ callId: 'R1', channelId: 'Cseen', channelName: 'seen', createdBy: 'U1', startedAt: 1000 });
+    store.upsertHuddleChannel({ channelId: 'Cconfigured', name: 'configured', ownerIds: ['U2'] });
+
+    const tracked = store.listTrackedHuddleChannels();
+    const byId = new Map(tracked.map((row) => [row.channel_id, row]));
+    assert.equal(tracked.length, 2);
+    assert.equal(byId.get('Cseen').configured, false, 'implicitly tracked, not configured');
+    assert.equal(byId.get('Cseen').name, 'seen');
+    assert.equal(byId.get('Cseen').enabled, 1, 'defaults to tracking on');
+    assert.deepEqual(byId.get('Cseen').owner_ids, []);
+    assert.equal(byId.get('Cconfigured').configured, true);
+    assert.deepEqual(byId.get('Cconfigured').owner_ids, ['U2']);
+  });
+
+  it('stays silent and logs why when tracking is turned off for a channel', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddleChannel({ channelId: 'Crandom', enabled: false, autoReplies: true, ownerIds: [] });
+
+    handlers.message(huddleThreadMessage({ channel: 'Crandom' }));
+    await flush();
+
+    const huddle = store.getHuddle('R1');
+    assert.equal(huddle.status, 'opted_out', 'recorded but silenced');
+    assert.equal(client.chat.postMessage.mock.callCount(), 0, 'never announces tracking in a disabled channel');
+    assert(
+      store
+        .listTriggerLog(50, ['Crandom'])
+        .some((entry) => entry.action === 'huddle_tracking_disabled' && entry.detail === 'R1'),
+      'logs that tracking is off in this channel',
+    );
+  });
+
+  it('treats a paused channel as opted out until it resumes', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddleChannel({
+      channelId: 'Crandom',
+      enabled: true,
+      pausedUntil: Math.floor(Date.now() / 1000) + 3600,
+    });
+
+    handlers.message(huddleThreadMessage({ channel: 'Crandom' }));
+    await flush();
+
+    assert.equal(store.getHuddle('R1').status, 'opted_out');
+    assert.equal(client.chat.postMessage.mock.callCount(), 0);
+    assert(
+      store.listTriggerLog(50, ['Crandom']).some((entry) => entry.action === 'huddle_tracking_paused'),
+      'logs the pause',
+    );
+  });
+
+  it('never replies to mentions when auto replies are off', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddleChannel({ channelId: 'Crandom', enabled: true, autoReplies: false });
+    handlers.message(huddleThreadMessage({ channel: 'Crandom' }));
+    await flush();
+    const postsBefore = client.chat.postMessage.mock.callCount();
+
+    await handlers.message({
+      message: {
+        type: 'message',
+        text: '<@BOTUSER> hello',
+        user: 'U1',
+        channel: 'Crandom',
+        ts: '172100.000000',
+        thread_ts: '172000.000000',
+      },
+    });
+    await flush();
+
+    assert.equal(
+      client.chat.postMessage.mock.callCount(),
+      postsBefore,
+      'no silly reply, only the tracking announcement from before',
+    );
+    assert.equal(
+      store.listTriggerLog(50, ['Crandom']).filter((entry) => entry.action === 'silly_request').length,
+      0,
+      'and nothing is logged as a request, because nothing happened',
+    );
+  });
+
+  it('ignores mentions from non-owners when the channel restricts triggers', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddleChannel({
+      channelId: 'Crandom',
+      enabled: true,
+      autoReplies: true,
+      restrictTriggers: true,
+      ownerIds: ['UOWNER'],
+    });
+    handlers.message(huddleThreadMessage({ channel: 'Crandom' }));
+    await flush();
+    const postsBefore = client.chat.postMessage.mock.callCount();
+
+    await handlers.message({
+      message: {
+        type: 'message',
+        text: '<@BOTUSER> hello',
+        user: 'UTRANSCRIPT',
+        channel: 'Crandom',
+        ts: '172100.000000',
+        thread_ts: '172000.000000',
+      },
+    });
+    await flush();
+    assert.equal(client.chat.postMessage.mock.callCount(), postsBefore, 'no reply for a non-owner');
+    assert(
+      store.listTriggerLog(50, ['Crandom']).some((entry) => entry.action === 'silly_request_denied'),
+      'logs the denial',
+    );
+
+    await handlers.message({
+      message: {
+        type: 'message',
+        text: '<@BOTUSER> hello',
+        user: 'UOWNER',
+        channel: 'Crandom',
+        ts: '172200.000000',
+        thread_ts: '172000.000000',
+      },
+    });
+    await flush();
+    assert(client.chat.postMessage.mock.callCount() > postsBefore, 'the channel owner still gets replies');
+  });
+
+  it('silences a huddle that was already running when tracking got paused', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({ callId: 'R1', channelId: 'Crandom', createdBy: 'UOWNER', startedAt: 172000 });
+    assert.equal(store.getHuddle('R1').status, 'active');
+
+    store.upsertHuddleChannel({ channelId: 'Crandom', pausedUntil: Math.floor(Date.now() / 1000) + 900 });
+    handlers.message(huddleThreadMessage({ channel: 'Crandom' }));
+    await flush();
+
+    assert.equal(store.getHuddle('R1').status, 'opted_out', 'no review or points for a paused huddle');
+    assert.equal(client.chat.postMessage.mock.callCount(), 0, 'stays quiet');
+    assert.equal(
+      store.listTriggerLog(50, ['Crandom']).filter((entry) => entry.action.startsWith('huddle_tracking_')).length,
+      0,
+      'does not re-log the pause for a huddle we already knew about',
+    );
+  });
+
+  it('denies track-again in a paused channel and says why', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({ callId: 'R1', channelId: 'Crandom', createdBy: 'UOWNER', startedAt: 172000 });
+    store.upsertHuddleChannel({ channelId: 'Crandom', pausedUntil: Math.floor(Date.now() / 1000) + 600 });
+
+    await handlers['action:huddle_track_again']({
+      ack: async () => {},
+      body: {
+        user: { id: 'UOWNER' },
+        actions: [{ value: 'R1' }],
+        message: { ts: '172000.000000', thread_ts: '172000.000000' },
+        container: { channel_id: 'Crandom' },
+      },
+      client,
+    });
+    await flush();
+
+    const updates = client.chat.update.mock.calls.map((call) => call.arguments[0]);
+    assert(
+      !updates.some((update) => update.text.includes('im tracking again')),
+      'never confirms that it resumed tracking',
+    );
+    assert(updates.at(-1)?.text.includes('tracking is paused'), 'explains the pause in-channel');
+    assert(
+      store
+        .listTriggerLog(50, ['Crandom'])
+        .some((entry) => entry.action === 'huddle_track_again_denied' && entry.detail === 'tracking paused'),
+      'logs the denial with the reason',
+    );
+  });
+});

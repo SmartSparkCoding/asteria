@@ -22,8 +22,31 @@ function parseParticipantHistory(huddle) {
   }
 }
 
+function parseJsonArray(value) {
+  try {
+    const parsed = JSON.parse(value ?? '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function nowEpochSeconds() {
   return Math.floor(Date.now() / 1000);
+}
+
+const DEFAULT_CHANNEL_RULES = {
+  configured: false,
+  enabled: true,
+  paused: false,
+  pausedUntil: 0,
+  autoReplies: true,
+  restrictTriggers: false,
+  ownerIds: [],
+};
+
+function normalizeOwnerIds(value) {
+  return Array.isArray(value) ? value.filter((id) => typeof id === 'string' && id) : [];
 }
 
 const SIX_SEVEN_JOKES = [
@@ -135,6 +158,51 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
         },
       ],
     };
+  }
+
+  /**
+   * Per-channel rules, configured from the app home. Unconfigured channels keep
+   * the default behaviour: tracking on, auto replies on, anyone can trigger.
+   */
+  function channelRules(channelId) {
+    const row = store.getHuddleChannel(channelId);
+    if (!row) {
+      return { ...DEFAULT_CHANNEL_RULES, tracking: true };
+    }
+    const pausedUntil = Number(row.paused_until) || 0;
+    const paused = pausedUntil > nowEpochSeconds();
+    const enabled = !!row.enabled;
+    return {
+      configured: true,
+      enabled,
+      paused,
+      pausedUntil,
+      autoReplies: enabled && !paused && !!row.auto_replies,
+      restrictTriggers: !!row.restrict_triggers,
+      ownerIds: normalizeOwnerIds(parseJsonArray(row.owner_ids)),
+      tracking: enabled && !paused,
+    };
+  }
+
+  function isChannelOwner(rules, userId) {
+    if (!userId) {
+      return false;
+    }
+    return rules.ownerIds.includes(userId);
+  }
+
+  function huddleChannelForThread(threadTs) {
+    if (!threadTs) {
+      return '';
+    }
+    return store.listHuddles().find((h) => h.thread_root_ts === threadTs)?.channel_id || '';
+  }
+
+  function mayTriggerInChannel(rules, userId) {
+    if (!rules.restrictTriggers) {
+      return true;
+    }
+    return isChannelOwner(rules, userId);
   }
 
   async function announceTrackingToThread(huddle) {
@@ -293,17 +361,39 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     if (room?.call_family !== 'huddle' || !room.id) {
       return;
     }
+    const channelId = message.channel || room.channels?.[0] || '';
     const existing = store.getHuddle(room.id);
     const endedAt = room.date_end || null;
+    const rules = channelRules(channelId || existing?.channel_id || '');
     store.upsertHuddle({
       callId: room.id,
-      channelId: message.channel || room.channels?.[0] || '',
+      channelId,
       createdBy: room.created_by || '',
       startedAt: room.date_start || 0,
       endedAt,
       threadRootTs: room.thread_root_ts || message.ts || '',
       participantHistory: room.participant_history || [],
     });
+    if (!rules.tracking) {
+      // The channel has tracking off or paused: record the huddle silently so we
+      // still have a timeline, but never announce it, review it or award points.
+      if (!existing) {
+        store.setHuddleOptedOut(room.id);
+        store.recordTriggerLog({
+          userId: '',
+          action: rules.paused ? 'huddle_tracking_paused' : 'huddle_tracking_disabled',
+          detail: room.id,
+          channelId,
+        });
+      } else if (store.getHuddle(room.id)?.status === 'active') {
+        // tracking was switched off while this huddle was already running
+        store.setHuddleOptedOut(room.id);
+      }
+      if (endedAt) {
+        void finalizeHuddle(room.id, endedAt);
+      }
+      return;
+    }
     if (!existing && !endedAt) {
       void announceTrackingToThread(store.getHuddle(room.id));
     }
@@ -372,12 +462,26 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       return;
     }
     const replyClient = eventClient ?? client;
+    const channelId = message.channel ?? channel ?? huddleChannelForThread(threadTs);
+    const rules = channelRules(channelId);
+    if (!rules.autoReplies) {
+      return;
+    }
+    if (!mayTriggerInChannel(rules, message?.user || '')) {
+      store.recordTriggerLog({
+        userId: message?.user || '',
+        action: 'silly_request_denied',
+        detail: 'not a channel owner',
+        channelId,
+      });
+      return;
+    }
     const huddle = store.listHuddles().find((h) => h.thread_root_ts === threadTs);
     store.recordTriggerLog({
       userId: message?.user || '',
       action: 'silly_request',
-      detail: threadTs || (message.channel ?? channel),
-      channelId: message.channel ?? channel ?? '',
+      detail: threadTs || channelId,
+      channelId,
     });
     const postReply = async (textOrBlocks) => {
       const updatePayload = {
@@ -497,6 +601,39 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     const ts = body?.message?.thread_ts || body?.message?.ts;
     const channelId = body?.container?.channel_id ?? body?.channel?.id;
     const huddle = store.getHuddle(callId);
+    const rules = channelRules(huddle?.channel_id || channelId || '');
+    if (!mayTriggerInChannel(rules, userId)) {
+      store.recordTriggerLog({
+        userId,
+        action: 'huddle_track_again_denied',
+        detail: 'not a channel owner',
+        channelId: huddle?.channel_id || channelId || '',
+      });
+      await declineTrackAgain({
+        actionClient,
+        channelId,
+        ts,
+        text: 'only the channel owners I was given can ask me to track a huddle here',
+      });
+      return;
+    }
+    if (!rules.tracking) {
+      store.recordTriggerLog({
+        userId,
+        action: 'huddle_track_again_denied',
+        detail: rules.paused ? 'tracking paused' : 'tracking disabled',
+        channelId: huddle?.channel_id || channelId || '',
+      });
+      await declineTrackAgain({
+        actionClient,
+        channelId,
+        ts,
+        text: rules.paused
+          ? 'tracking is paused in this channel right now, so im staying quiet :zipper-mouth:'
+          : 'tracking is turned off in this channel, so im staying quiet :zipper-mouth:',
+      });
+      return;
+    }
     const stillLive = await isHuddleStillLive(huddle, actionClient);
     if (!stillLive) {
       store.recordTriggerLog({
@@ -505,26 +642,12 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
         detail: callId,
         channelId: huddle?.channel_id || channelId || '',
       });
-      if (ts && channelId) {
-        try {
-          await actionClient.chat.update({
-            channel: channelId,
-            ts,
-            text: "that huddle's already over 💀 :freddie-sleeping: - nothing to track",
-            blocks: [
-              {
-                type: 'section',
-                text: {
-                  type: 'mrkdwn',
-                  text: "that huddle's already over 💀 :freddie-sleeping: - nothing to track",
-                },
-              },
-            ],
-          });
-        } catch (error) {
-          logger.error(`Failed to decline huddle re-tracking for ${callId}`, error);
-        }
-      }
+      await declineTrackAgain({
+        actionClient,
+        channelId,
+        ts,
+        text: "that huddle's already over 💀 :freddie-sleeping: - nothing to track",
+      });
       return;
     }
     const reactivated = store.reactivateHuddle(callId);
@@ -559,6 +682,22 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     }
   }
 
+  async function declineTrackAgain({ actionClient, channelId, ts, text }) {
+    if (!ts || !channelId) {
+      return;
+    }
+    try {
+      await actionClient.chat.update({
+        channel: channelId,
+        ts,
+        text,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }],
+      });
+    } catch (error) {
+      logger.error(`Failed to decline huddle re-tracking in ${channelId}`, error);
+    }
+  }
+
   async function handleGenerateReview({ ack, body, client: actionClient }) {
     if (ack) {
       await ack();
@@ -572,6 +711,20 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       await actionClient.chat.postMessage({
         channel: body?.user?.id,
         text: 'Sorry, I could not find that huddle anymore.',
+      });
+      return;
+    }
+    const rules = channelRules(huddle.channel_id || body?.container?.channel_id || '');
+    if (!mayTriggerInChannel(rules, body?.user?.id || '')) {
+      store.recordTriggerLog({
+        userId: body?.user?.id,
+        action: 'huddle_review_denied',
+        detail: 'not a channel owner',
+        channelId: huddle.channel_id || body?.container?.channel_id || '',
+      });
+      await actionClient.chat.postMessage({
+        channel: body?.user?.id,
+        text: 'only the channel owners I was given can ask me for a review in that channel',
       });
       return;
     }

@@ -7,37 +7,87 @@ function toBooleanString(value) {
   return value ? 'ON' : 'OFF';
 }
 
-function buildTabs(activeTab, isOwner) {
-  if (!isOwner) {
-    return null;
-  }
-  const tabs = [
+const CHANNELS_CATEGORY = 'channels';
+const HUDDLES_CATEGORY = 'huddles';
+
+const CATEGORY_TABS = [
+  { id: CHANNELS_CATEGORY, label: 'Channel Manager', appOwnerOnly: true },
+  { id: HUDDLES_CATEGORY, label: 'Huddles' },
+];
+
+const SUB_TABS = {
+  [CHANNELS_CATEGORY]: [
     { id: 'daily-update', label: 'Daily Update' },
     { id: 'daily-question', label: 'Daily Question' },
     { id: 'welcomer', label: 'Welcomer' },
     { id: 'home-assistant', label: 'Home Assistant' },
-    { id: 'huddles', label: 'Huddles' },
     { id: 'sync', label: 'Sync' },
     { id: 'settings', label: 'Settings' },
-    { id: 'leaderboard', label: 'Leaderboard' },
-    { id: 'logs', label: 'Logs' },
     { id: 'delete', label: 'Delete' },
-  ];
+  ],
+  [HUDDLES_CATEGORY]: [
+    { id: 'huddle-channels', label: 'Channels' },
+    { id: 'huddles', label: 'Huddles' },
+    { id: 'leaderboard', label: 'Leaderboard' },
+    { id: 'logs', label: 'Logs', appOwnerOnly: true },
+  ],
+};
 
+export function defaultCategoryFor(isAppOwner) {
+  return isAppOwner ? CHANNELS_CATEGORY : HUDDLES_CATEGORY;
+}
+
+export function defaultSubFor(category, isAppOwner) {
+  if (category === HUDDLES_CATEGORY) {
+    return 'huddle-channels';
+  }
+  return isAppOwner ? 'daily-update' : 'leaderboard';
+}
+
+function buildActionRow(buttons) {
   return {
     type: 'actions',
     block_id: 'navigation_tabs',
-    elements: tabs.map((tab) => ({
-      type: 'button',
-      action_id: `navigate_${tab.id.replace(/-/g, '_')}`,
-      text: {
-        type: 'plain_text',
-        text: tab.label,
-      },
-      value: tab.id,
-      ...(tab.id === activeTab ? { style: 'primary' } : {}),
-    })),
+    elements: buttons,
   };
+}
+
+/**
+ * Two category tabs, each with its own row of sub-category tabs. Channel owners
+ * who are not the app owner only ever see the huddle category.
+ */
+export function buildNavigationBlocks({ category, sub, isAppOwner, isChannelOwner = false }) {
+  if (!isAppOwner && !isChannelOwner) {
+    return [];
+  }
+  const activeCategory = SUB_TABS[category] ? category : defaultCategoryFor(isAppOwner);
+  const categories = CATEGORY_TABS.filter((entry) => isAppOwner || !entry.appOwnerOnly);
+  const subs = SUB_TABS[activeCategory].filter((entry) => isAppOwner || !entry.appOwnerOnly);
+  const blocks = [
+    buildActionRow(
+      categories.map((entry) => ({
+        type: 'button',
+        action_id: `navigate_category_${entry.id}`,
+        text: { type: 'plain_text', text: entry.label },
+        value: entry.id,
+        ...(entry.id === activeCategory ? { style: 'primary' } : {}),
+      })),
+    ),
+  ];
+  if (subs.length > 1) {
+    blocks.push(
+      buildActionRow(
+        subs.map((entry) => ({
+          type: 'button',
+          action_id: `navigate_sub_${entry.id.replace(/-/g, '_')}`,
+          text: { type: 'plain_text', text: entry.label },
+          value: `${activeCategory}/${entry.id}`,
+          ...(entry.id === sub ? { style: 'primary' } : {}),
+        })),
+      ),
+    );
+  }
+  return blocks;
 }
 
 function buildBanner(notice) {
@@ -75,7 +125,7 @@ function buildTopSummary(settings) {
   };
 }
 
-function buildDailyUpdateView({ settings, draft, questionPreview, notice }) {
+function buildDailyUpdateView({ settings, draft, questionPreview, notice, navigation }) {
   const draftPreview = draft?.main_update_text ? contentToMrkdwn(draft.main_update_text) : '';
 
   return {
@@ -84,7 +134,7 @@ function buildDailyUpdateView({ settings, draft, questionPreview, notice }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('daily-update', true),
+      ...(navigation ?? []),
       buildTopSummary(settings),
       {
         type: 'section',
@@ -209,14 +259,14 @@ function buildDailyUpdateView({ settings, draft, questionPreview, notice }) {
   };
 }
 
-function buildDailyQuestionView({ settings, notice, recentQuestions }) {
+function buildDailyQuestionView({ settings, notice, recentQuestions, navigation }) {
   return {
     type: 'home',
     callback_id: 'asteria_home_daily_question',
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('daily-question', true),
+      ...(navigation ?? []),
       {
         type: 'section',
         text: {
@@ -366,14 +416,14 @@ function buildDailyQuestionView({ settings, notice, recentQuestions }) {
   };
 }
 
-function buildWelcomerView({ settings, notice }) {
+function buildWelcomerView({ settings, notice, navigation }) {
   return {
     type: 'home',
     callback_id: 'asteria_home_welcomer',
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('welcomer', true),
+      ...(navigation ?? []),
       {
         type: 'section',
         text: {
@@ -479,7 +529,7 @@ function buildWelcomerView({ settings, notice }) {
   };
 }
 
-function buildSyncView({ settings, notice, isOwner }) {
+function buildSyncView({ settings, notice, isOwner, navigation }) {
   const configured = Boolean(settings.todoist_api_token && settings.slack_list_id);
 
   return {
@@ -488,7 +538,7 @@ function buildSyncView({ settings, notice, isOwner }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('sync', true),
+      ...(navigation ?? []),
       {
         type: 'section',
         text: {
@@ -631,7 +681,7 @@ function buildSyncView({ settings, notice, isOwner }) {
   };
 }
 
-function buildHomeAssistantView({ settings, notice, isOwner, stepsSummary }) {
+function buildHomeAssistantView({ settings, notice, isOwner, stepsSummary, navigation }) {
   const configured = Boolean(
     settings.home_assistant_url && settings.home_assistant_token && settings.home_assistant_steps_entity,
   );
@@ -642,7 +692,7 @@ function buildHomeAssistantView({ settings, notice, isOwner, stepsSummary }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('home-assistant', true),
+      ...(navigation ?? []),
       {
         type: 'section',
         text: {
@@ -746,14 +796,14 @@ function buildHomeAssistantView({ settings, notice, isOwner, stepsSummary }) {
   };
 }
 
-function buildSettingsView({ settings, notice }) {
+function buildSettingsView({ settings, notice, navigation }) {
   return {
     type: 'home',
     callback_id: 'asteria_home_settings',
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('settings', true),
+      ...(navigation ?? []),
       {
         type: 'section',
         text: {
@@ -912,14 +962,14 @@ function formatHuddleSummary(huddle, timezone) {
   return `• ${channel} · ${startLabel}${status}`;
 }
 
-export function buildHuddlesView({ huddles, notice, timezone }) {
+export function buildHuddlesView({ huddles, notice, timezone, navigation }) {
   return {
     type: 'home',
     callback_id: 'asteria_home_huddles',
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('huddles', true),
+      ...(navigation ?? []),
       {
         type: 'section',
         text: {
@@ -950,7 +1000,7 @@ export function buildHuddlesView({ huddles, notice, timezone }) {
   };
 }
 
-export function buildLeaderboardView({ leaderboard, notice, isOwner }) {
+export function buildLeaderboardView({ leaderboard, notice, navigation }) {
   const ranked = (leaderboard || []).map((row) => `• <@${row.user_id}> · *${row.points} pts*`);
 
   return {
@@ -959,7 +1009,7 @@ export function buildLeaderboardView({ leaderboard, notice, isOwner }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      ...(isOwner ? [buildTabs('leaderboard', true)] : []),
+      ...(navigation ?? []),
       {
         type: 'section',
         text: {
@@ -1000,7 +1050,135 @@ function formatTriggerLogEntry(entry, timezone) {
   return `• ${timeLabel} · ${actor} · *${entry.action}*${channel}${detail}`;
 }
 
-export function buildLogsView({ logs, notice, timezone }) {
+const HuddleChannelActionPrefix = 'huddle_channel_';
+
+function describeHuddleChannel(channel, now) {
+  const pausedUntil = Number(channel.pausedUntil) || 0;
+  const paused = pausedUntil > now;
+  const owners = (channel.ownerIds || []).map((id) => `<@${id}>`).join(' ') || '_nobody yet_';
+  const status = paused
+    ? `:pause_button: *paused* until <!date^${pausedUntil}^{date_short_pretty} at {time}|falling back to the stored time>>`
+    : channel.enabled
+      ? ':green_circle: *tracking on*'
+      : ':red_circle: *tracking off*';
+  return [
+    status,
+    `auto replies: ${channel.autoReplies ? ':white_check_mark: on' : ':no_entry: off'}`,
+    `only owners can trigger: ${channel.restrictTriggers ? ':white_check_mark: on' : ':no_entry: off'}`,
+    `channel owner(s): ${owners}`,
+  ].join('\n');
+}
+
+function buildHuddleChannelBlocks(channel, now) {
+  const paused = (Number(channel.pausedUntil) || 0) > now;
+  const value = channel.channelId;
+  const mainButtons = [
+    {
+      type: 'button',
+      action_id: `${HuddleChannelActionPrefix}configure`,
+      text: { type: 'plain_text', text: 'Configure' },
+      value,
+    },
+    {
+      type: 'button',
+      action_id: `${HuddleChannelActionPrefix}toggle_tracking`,
+      text: { type: 'plain_text', text: channel.enabled ? 'Tracking: on' : 'Tracking: off' },
+      value,
+    },
+    {
+      type: 'button',
+      action_id: `${HuddleChannelActionPrefix}toggle_auto_replies`,
+      text: { type: 'plain_text', text: channel.autoReplies ? 'Replies: on' : 'Replies: off' },
+      value,
+    },
+    {
+      type: 'button',
+      action_id: `${HuddleChannelActionPrefix}toggle_restrict`,
+      text: { type: 'plain_text', text: channel.restrictTriggers ? 'Owners only: on' : 'Owners only: off' },
+      value,
+    },
+  ];
+  const pauseButtons = paused
+    ? [
+        {
+          type: 'button',
+          action_id: `${HuddleChannelActionPrefix}resume`,
+          text: { type: 'plain_text', text: 'Resume now' },
+          value,
+          style: 'primary',
+        },
+      ]
+    : [15, 60, 240, 1440].map((minutes) => ({
+        type: 'button',
+        action_id: `${HuddleChannelActionPrefix}pause`,
+        text: {
+          type: 'plain_text',
+          text: minutes >= 1440 ? 'Pause 1 day' : `Pause ${minutes >= 60 ? `${minutes / 60}h` : `${minutes}m`}`,
+        },
+        value: `${value}:${minutes}`,
+      }));
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*<#${channel.channelId}>*${channel.name ? ` · _${channel.name}_` : ''}\n${describeHuddleChannel(channel, now)}`,
+      },
+    },
+    buildActionRow(mainButtons),
+    buildActionRow(pauseButtons),
+  ];
+}
+
+export function buildHuddleChannelsView({ channels, notice, navigation, canConfigureAll = false }) {
+  const now = Math.floor(Date.now() / 1000);
+  const visible = (channels || []).slice(0, 25);
+
+  return {
+    type: 'home',
+    callback_id: 'asteria_home_huddle_channels',
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: 'Huddle channels' } },
+      ...buildBanner(notice),
+      ...(navigation ?? []),
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: canConfigureAll
+            ? 'Every channel I track huddles in. Turn tracking on or off, pause me for a while, silence my replies, or limit who can trigger me — channel owners can do the same for their own channel from here.'
+            : 'The channels you are the owner of. You can turn tracking on or off, pause me, silence my replies, or limit who can trigger me here.',
+        },
+      },
+      ...(visible.length > 0
+        ? visible.flatMap((channel) => buildHuddleChannelBlocks(channel, now))
+        : [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: '_No huddle channels yet — I will show up here once I am in a channel with a huddle._',
+              },
+            },
+          ]),
+      ...((channels || []).length > visible.length
+        ? [
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `_showing the first ${visible.length} of ${channels.length} channels_`,
+                },
+              ],
+            },
+          ]
+        : []),
+    ],
+  };
+}
+
+export function buildLogsView({ logs, notice, timezone, navigation }) {
   const lines = (logs || []).map((entry) => formatTriggerLogEntry(entry, timezone));
 
   return {
@@ -1009,7 +1187,7 @@ export function buildLogsView({ logs, notice, timezone }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('logs', true),
+      ...(navigation ?? []),
       {
         type: 'section',
         text: {
@@ -1040,14 +1218,14 @@ export function buildLogsView({ logs, notice, timezone }) {
   };
 }
 
-export function buildDeleteView({ notice }) {
+export function buildDeleteView({ notice, navigation }) {
   return {
     type: 'home',
     callback_id: 'asteria_home_delete',
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('delete', true),
+      ...(navigation ?? []),
       {
         type: 'section',
         text: {
@@ -1087,61 +1265,88 @@ export function buildDeleteView({ notice }) {
 }
 
 export function buildHomeView({
-  tab,
+  category,
+  sub,
   settings,
   draft,
   questionPreview,
   recentQuestions,
   notice,
   isOwner,
+  isChannelOwner = false,
   syncSettings,
   huddles,
+  huddleChannels,
   leaderboard,
   logs,
 }) {
-  if (!isOwner) {
-    return buildLeaderboardView({ leaderboard: leaderboard || [], notice, isOwner: false });
+  const activeCategory =
+    SUB_TABS[category] && (isOwner || category !== CHANNELS_CATEGORY) ? category : defaultCategoryFor(isOwner);
+  const activeSub = SUB_TABS[activeCategory].some((entry) => entry.id === sub)
+    ? sub
+    : defaultSubFor(activeCategory, isOwner);
+  const navigation = buildNavigationBlocks({
+    category: activeCategory,
+    sub: activeSub,
+    isAppOwner: isOwner,
+    isChannelOwner,
+  });
+  const canConfigureHuddleChannels = isOwner || isChannelOwner;
+
+  if (!isOwner && !isChannelOwner) {
+    return buildLeaderboardView({ leaderboard: leaderboard || [], notice, navigation });
   }
 
-  if (tab === 'daily-question') {
-    return buildDailyQuestionView({
-      settings,
-      notice,
-      recentQuestions: recentQuestions || [],
-    });
+  if (activeCategory === HUDDLES_CATEGORY) {
+    if (activeSub === 'huddle-channels') {
+      if (!canConfigureHuddleChannels) {
+        return buildLeaderboardView({ leaderboard: leaderboard || [], notice, navigation });
+      }
+      return buildHuddleChannelsView({
+        channels: huddleChannels || [],
+        notice,
+        navigation,
+        canConfigureAll: isOwner,
+      });
+    }
+    if (activeSub === 'huddles') {
+      if (!isOwner) {
+        return buildLeaderboardView({ leaderboard: leaderboard || [], notice, navigation });
+      }
+      return buildHuddlesView({ huddles: huddles || [], notice, timezone: settings.timezone, navigation });
+    }
+    if (activeSub === 'leaderboard') {
+      return buildLeaderboardView({ leaderboard: leaderboard || [], notice, navigation });
+    }
+    if (activeSub === 'logs') {
+      if (!isOwner) {
+        return buildLeaderboardView({ leaderboard: leaderboard || [], notice, navigation });
+      }
+      return buildLogsView({ logs: logs || [], notice, timezone: settings.timezone, navigation });
+    }
   }
 
-  if (tab === 'welcomer') {
-    return buildWelcomerView({ settings, notice });
+  if (activeCategory === CHANNELS_CATEGORY) {
+    if (activeSub === 'daily-question') {
+      return buildDailyQuestionView({ settings, notice, recentQuestions: recentQuestions || [], navigation });
+    }
+    if (activeSub === 'welcomer') {
+      return buildWelcomerView({ settings, notice, navigation });
+    }
+    if (activeSub === 'home-assistant') {
+      return buildHomeAssistantView({ settings, notice, isOwner, navigation });
+    }
+    if (activeSub === 'sync') {
+      return buildSyncView({ settings: syncSettings || {}, notice, isOwner, navigation });
+    }
+    if (activeSub === 'settings') {
+      return buildSettingsView({ settings, notice, navigation });
+    }
+    if (activeSub === 'delete') {
+      return buildDeleteView({ notice, navigation });
+    }
+    return buildDailyUpdateView({ settings, draft, questionPreview, notice, navigation });
   }
 
-  if (tab === 'home-assistant') {
-    return buildHomeAssistantView({ settings, notice, isOwner });
-  }
-
-  if (tab === 'huddles') {
-    return buildHuddlesView({ huddles: huddles || [], notice, timezone: settings.timezone });
-  }
-
-  if (tab === 'sync') {
-    return buildSyncView({ settings: syncSettings || {}, notice, isOwner });
-  }
-
-  if (tab === 'settings') {
-    return buildSettingsView({ settings, notice });
-  }
-
-  if (tab === 'leaderboard') {
-    return buildLeaderboardView({ leaderboard: leaderboard || [], notice, isOwner: true });
-  }
-
-  if (tab === 'logs') {
-    return buildLogsView({ logs: logs || [], notice, timezone: settings.timezone });
-  }
-
-  if (tab === 'delete') {
-    return buildDeleteView({ notice });
-  }
-
-  return buildDailyUpdateView({ settings, draft, questionPreview, notice });
+  return buildLeaderboardView({ leaderboard: leaderboard || [], notice, navigation });
 }

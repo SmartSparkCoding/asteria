@@ -381,7 +381,7 @@ describe('App Home handlers', () => {
     const client = createClient();
     const handlers = createHandlerTestHarness({ store });
 
-    await handlers.publishTab(client, 'UOWNER', 'settings');
+    await handlers.publishTab(client, 'UOWNER', 'channels', 'settings');
 
     const publishArgs = client.views.publish.mock.calls[0].arguments[0];
     const viewJson = JSON.stringify(publishArgs.view);
@@ -739,7 +739,7 @@ describe('App Home handlers', () => {
     const client = createClient();
     const handlers = createHandlerTestHarness({ store });
 
-    await handlers.publishTab(client, 'UOWNER', 'settings');
+    await handlers.publishTab(client, 'UOWNER', 'channels', 'settings');
 
     const publishArgs = client.views.publish.mock.calls[0].arguments[0];
     const botNameInput = publishArgs.view.blocks.find((block) => block.block_id === 'bot_name_block');
@@ -760,7 +760,7 @@ describe('App Home handlers', () => {
     const client = createClient();
     const handlers = createHandlerTestHarness({ store });
 
-    await handlers.publishTab(client, 'UOWNER', 'daily-question');
+    await handlers.publishTab(client, 'UOWNER', 'channels', 'daily-question');
 
     const publishArgs = client.views.publish.mock.calls[0].arguments[0];
     const viewJson = JSON.stringify(publishArgs.view);
@@ -923,12 +923,274 @@ describe('App Home handlers', () => {
     const client = createClient();
     const handlers = createHandlerTestHarness({ store });
 
-    await handlers.publishTab(client, 'UOWNER', 'huddles');
+    await handlers.publishTab(client, 'UOWNER', 'huddles', 'huddles');
 
     const publishArgs = client.views.publish.mock.calls[0].arguments[0];
     const messageText = publishArgs.view.blocks.filter((block) => block.type === 'section').at(-1).text.text;
     assert(messageText.includes('<#C123>'));
     assert(!messageText.includes('unknown channel'));
+    store.close();
+  });
+});
+
+describe('App Home categories and huddle channel controls', () => {
+  async function createHarness({ ownerId = 'UOWNER' } = {}) {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asteria-categories-'));
+    const databasePath = path.join(tempDir, 'asteria.sqlite');
+    createdPaths.push(databasePath);
+    const store = await createStore(databasePath);
+    store.updateSettings({ personal_channel_owner_id: ownerId, timezone: 'UTC' });
+    return { store, handlers: createHandlerTestHarness({ store }), client: createClient() };
+  }
+
+  function buttonLabels(blocks) {
+    return blocks.flatMap((block) =>
+      (block.elements || []).filter((element) => element.action_id).map((element) => element.text.text),
+    );
+  }
+
+  it('gives the app owner two category tabs, each with sub-tabs', async () => {
+    const { store, handlers, client } = await createHarness();
+
+    await handlers.publishTab(client, 'UOWNER', 'channels', 'daily-update');
+    let labels = buttonLabels(client.views.publish.mock.calls.at(-1).arguments[0].view.blocks);
+    assert(labels.includes('Channel Manager'), 'category tab');
+    assert(labels.includes('Huddles'), 'category tab');
+    assert(labels.includes('Daily Update'), 'sub-category tab');
+    assert(labels.includes('Daily Question'));
+    assert(!labels.includes('Logs'), 'the channels category has no Logs sub-tab');
+
+    await handlers.publishTab(client, 'UOWNER', 'huddles', 'huddle-channels');
+    labels = buttonLabels(client.views.publish.mock.calls.at(-1).arguments[0].view.blocks);
+    assert(labels.includes('Channels'), 'huddle channel controls sub-tab');
+    assert(labels.includes('Leaderboard'));
+    assert(labels.includes('Logs'));
+    assert(!labels.includes('Welcomer'), 'no channel-manager sub-tabs leak into huddles');
+    store.close();
+  });
+
+  it('shows a non-owner who owns a channel the huddle category only', async () => {
+    const { store, handlers, client } = await createHarness();
+    store.upsertHuddleChannel({ channelId: 'Crandom', ownerIds: ['UOWNER', 'UOTHER'] });
+
+    await handlers.publishTab(client, 'UOTHER', 'huddles', 'huddle-channels');
+    const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
+    const labels = buttonLabels(view.blocks);
+    assert.equal(view.callback_id, 'asteria_home_huddle_channels');
+    assert(labels.includes('Huddles'));
+    assert(!labels.includes('Channel Manager'), 'no channel manager for a non app owner');
+    assert(!labels.includes('Logs'), 'logs stay app-owner only');
+    store.close();
+  });
+
+  it('keeps a random non-owner on the leaderboard with no navigation', async () => {
+    const { store, handlers, client } = await createHarness();
+
+    await handlers.publishTab(client, 'USTRANGER', 'huddles', 'leaderboard');
+    const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
+    assert.equal(view.callback_id, 'asteria_home_leaderboard');
+    assert.equal(
+      view.blocks.filter((block) => block.block_id === 'navigation_tabs').length,
+      0,
+      'no tabs for someone with nothing to manage',
+    );
+    store.close();
+  });
+
+  it('only shows a channel owner the channels they own', async () => {
+    const { store, handlers, client } = await createHarness();
+    store.upsertHuddleChannel({ channelId: 'Cmine', ownerIds: ['UOTHER'] });
+    store.upsertHuddleChannel({ channelId: 'Ctheirs', ownerIds: ['USOMEONE'] });
+    store.upsertHuddle({ callId: 'R1', channelId: 'Cunconfigured', startedAt: 1000 });
+
+    await handlers.publishTab(client, 'UOTHER', 'huddles', 'huddle-channels');
+    let viewText = JSON.stringify(client.views.publish.mock.calls.at(-1).arguments[0].view);
+    assert(viewText.includes('Cmine'), 'sees their own channel');
+    assert(!viewText.includes('Ctheirs'), 'never sees a channel they do not own');
+
+    await handlers.publishTab(client, 'UOWNER', 'huddles', 'huddle-channels');
+    viewText = JSON.stringify(client.views.publish.mock.calls.at(-1).arguments[0].view);
+    assert(viewText.includes('Ctheirs'), 'the app owner sees every tracked channel');
+    assert(viewText.includes('Cunconfigured'), 'including ones nobody configured yet');
+    store.close();
+  });
+
+  it('renders per-channel controls for tracking, replies, pause and permissions', async () => {
+    const { store, handlers, client } = await createHarness();
+    store.upsertHuddleChannel({ channelId: 'Crandom', ownerIds: ['UOWNER'] });
+
+    await handlers.publishTab(client, 'UOWNER', 'huddles', 'huddle-channels');
+    const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
+    const actionIds = view.blocks.flatMap((block) => (block.elements || []).map((element) => element.action_id));
+    assert(actionIds.includes('huddle_channel_configure'));
+    assert(actionIds.includes('huddle_channel_toggle_tracking'));
+    assert(actionIds.includes('huddle_channel_toggle_auto_replies'));
+    assert(actionIds.includes('huddle_channel_toggle_restrict'));
+    assert(actionIds.includes('huddle_channel_pause'));
+    assert(actionIds.includes('huddle_channel_resume') === false, 'no resume button while not paused');
+
+    const viewText = JSON.stringify(view);
+    assert(viewText.includes('channel owner(s): <@UOWNER>'), 'shows who owns the channel');
+    assert(viewText.includes('Pause 15m'), 'offers a temporary pause');
+    store.close();
+  });
+
+  it('toggles tracking, pauses and resumes from the app home, logging each change', async () => {
+    const { store, handlers, client } = await createHarness();
+    store.upsertHuddleChannel({ channelId: 'Crandom', ownerIds: ['UOWNER'] });
+
+    await handlers['action:huddle_channel_toggle_tracking']({
+      ack: mock.fn(),
+      body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom' }] },
+      client,
+    });
+    assert.equal(store.getHuddleChannel('Crandom').enabled, 0, 'tracking off');
+
+    await handlers['action:huddle_channel_toggle_auto_replies']({
+      ack: mock.fn(),
+      body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom' }] },
+      client,
+    });
+    assert.equal(store.getHuddleChannel('Crandom').auto_replies, 0, 'replies off');
+
+    await handlers['action:huddle_channel_toggle_restrict']({
+      ack: mock.fn(),
+      body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom' }] },
+      client,
+    });
+    assert.equal(store.getHuddleChannel('Crandom').restrict_triggers, 1, 'owners only');
+
+    await handlers['action:huddle_channel_pause']({
+      ack: mock.fn(),
+      body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom:60' }] },
+      client,
+    });
+    assert(store.getHuddleChannel('Crandom').paused_until > Math.floor(Date.now() / 1000), 'paused for an hour');
+
+    await handlers['action:huddle_channel_resume']({
+      ack: mock.fn(),
+      body: { user: { id: 'UOWNER' }, actions: [{ value: 'Crandom' }] },
+      client,
+    });
+    assert.equal(store.getHuddleChannel('Crandom').paused_until, 0, 'resumed');
+
+    const logs = store.listTriggerLog(50, ['Crandom']);
+    const configLogs = logs.filter((entry) => entry.action === 'huddle_channel_config');
+    assert.equal(configLogs.length, 5, 'every change is logged');
+    assert.equal(configLogs[0].user_id, 'UOWNER');
+    assert(configLogs.some((entry) => entry.detail.includes('tracking off')));
+    assert(configLogs.some((entry) => entry.detail.includes('auto replies off')));
+    assert(configLogs.some((entry) => entry.detail.includes('trigger access owners only')));
+    assert(configLogs.some((entry) => entry.detail.includes('paused')));
+    assert(configLogs.some((entry) => entry.detail.includes('resumed')));
+    store.close();
+  });
+
+  it('lets a channel owner configure their own channel but nobody else', async () => {
+    const { store, handlers, client } = await createHarness();
+    store.upsertHuddleChannel({ channelId: 'Cmine', ownerIds: ['UOTHER'] });
+    store.upsertHuddleChannel({ channelId: 'Ctheirs', ownerIds: ['USOMEONE'] });
+
+    await handlers['action:huddle_channel_toggle_tracking']({
+      ack: mock.fn(),
+      body: { user: { id: 'UOTHER' }, actions: [{ value: 'Cmine' }] },
+      client,
+    });
+    assert.equal(store.getHuddleChannel('Cmine').enabled, 0, 'a channel owner can pause their own tracking');
+
+    await handlers['action:huddle_channel_toggle_tracking']({
+      ack: mock.fn(),
+      body: { user: { id: 'UOTHER' }, actions: [{ value: 'Ctheirs' }] },
+      client,
+    });
+    assert.equal(store.getHuddleChannel('Ctheirs').enabled, 1, 'but not touch a channel they do not own');
+
+    await handlers['action:huddle_channel_toggle_tracking']({
+      ack: mock.fn(),
+      body: { user: { id: 'USTRANGER' }, actions: [{ value: 'Cmine' }] },
+      client,
+    });
+    assert.equal(store.getHuddleChannel('Cmine').enabled, 0, 'a stranger changes nothing');
+
+    const configLogs = store
+      .listTriggerLog(50, ['Cmine', 'Ctheirs'])
+      .filter((e) => e.action === 'huddle_channel_config');
+    assert.equal(configLogs.length, 1, 'only the permitted change is logged');
+    assert.equal(configLogs[0].user_id, 'UOTHER');
+    store.close();
+  });
+
+  it('saves owners and toggles from the config modal and logs it', async () => {
+    const { store, handlers, client } = await createHarness();
+    store.upsertHuddleChannel({ channelId: 'Crandom', ownerIds: [], enabled: true, autoReplies: true });
+
+    await handlers['view:huddle_channel_config_submit']({
+      ack: mock.fn(),
+      body: {
+        user: { id: 'UOWNER' },
+        view: {
+          private_metadata: 'Crandom',
+          state: {
+            values: {
+              huddle_channel_owners_block: {
+                huddle_channel_owners_value: { value: 'UOTHER, <@UTHIRD>' },
+              },
+              huddle_channel_tracking_block: {
+                huddle_channel_tracking_value: { selected_option: { value: 'off' } },
+              },
+              huddle_channel_replies_block: {
+                huddle_channel_replies_value: { selected_option: { value: 'off' } },
+              },
+              huddle_channel_restrict_block: {
+                huddle_channel_restrict_value: { selected_option: { value: 'owners' } },
+              },
+              huddle_channel_pause_block: {
+                huddle_channel_pause_value: { selected_option: { value: '15' } },
+              },
+            },
+          },
+        },
+      },
+      client,
+    });
+
+    const row = store.getHuddleChannel('Crandom');
+    assert.deepEqual(JSON.parse(row.owner_ids), ['UOTHER', 'UTHIRD'], 'parses ids out of messy input');
+    assert.equal(row.enabled, 0);
+    assert.equal(row.auto_replies, 0);
+    assert.equal(row.restrict_triggers, 1);
+    assert(row.paused_until > Math.floor(Date.now() / 1000), 'paused for 15 minutes');
+
+    const log = store.listTriggerLog(50, ['Crandom']).find((entry) => entry.action === 'huddle_channel_config');
+    assert(log.detail.includes('owners set to <@UOTHER> <@UTHIRD>'));
+    assert(log.detail.includes('tracking off'));
+    assert(log.detail.includes('paused'));
+    store.close();
+  });
+
+  it('opens the config modal with the current settings for a permitted user only', async () => {
+    const { store, handlers, client } = await createHarness();
+    store.upsertHuddleChannel({ channelId: 'Cmine', ownerIds: ['UOTHER'], autoReplies: false });
+
+    await handlers['action:huddle_channel_configure']({
+      ack: mock.fn(),
+      body: { user: { id: 'UOTHER' }, actions: [{ value: 'Cmine' }], trigger_id: 'T1' },
+      client,
+    });
+    const modal = client.views.open.mock.calls.at(-1).arguments[0].view;
+    assert.equal(modal.callback_id, 'huddle_channel_config_submit');
+    assert.equal(modal.private_metadata, 'Cmine');
+    const modalText = JSON.stringify(modal);
+    assert(modalText.includes('UOTHER'), 'prefilled with the current owners');
+    assert(modalText.includes('owners'), 'can restrict triggers to owners');
+
+    const modalsBefore = client.views.open.mock.callCount();
+    await handlers['action:huddle_channel_configure']({
+      ack: mock.fn(),
+      body: { user: { id: 'USTRANGER' }, actions: [{ value: 'Cmine' }], trigger_id: 'T2' },
+      client,
+    });
+    assert.equal(client.views.open.mock.callCount(), modalsBefore, 'a stranger gets no modal');
     store.close();
   });
 });

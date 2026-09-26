@@ -42,6 +42,109 @@ function buildPlainTextInput({ blockId, actionId, label, initialValue, placehold
   };
 }
 
+function buildStaticSelect({ blockId, actionId, label, options }) {
+  return {
+    type: 'input',
+    block_id: blockId,
+    label: {
+      type: 'plain_text',
+      text: label,
+    },
+    element: {
+      type: 'static_select',
+      action_id: actionId,
+      initial_option: options.find((option) => option.initial) || options[0],
+      options: options.map((option) => ({
+        text: { type: 'plain_text', text: option.label },
+        value: option.value,
+      })),
+    },
+  };
+}
+
+const HuddlePauseOptions = [
+  { value: '0', label: 'Not paused' },
+  { value: '15', label: 'Paused for 15 minutes' },
+  { value: '60', label: 'Paused for 1 hour' },
+  { value: '240', label: 'Paused for 4 hours' },
+  { value: '1440', label: 'Paused for 1 day' },
+];
+
+export function buildHuddleChannelModal({ channel, nowSeconds = Math.floor(Date.now() / 1000) }) {
+  const pausedUntil = Number(channel.pausedUntil) || 0;
+  const activePauseMinutes = pausedUntil > nowSeconds ? Math.max(15, Math.round((pausedUntil - nowSeconds) / 60)) : 0;
+  const closestPause = HuddlePauseOptions.reduce((best, option) => {
+    const value = Number(option.value);
+    const bestValue = Number(best.value);
+    return Math.abs(value - activePauseMinutes) < Math.abs(bestValue - activePauseMinutes) ? option : best;
+  }, HuddlePauseOptions[0]);
+  const owners = (channel.ownerIds || []).join(', ');
+
+  return {
+    type: 'modal',
+    callback_id: 'huddle_channel_config_submit',
+    private_metadata: channel.channelId,
+    title: { type: 'plain_text', text: 'Huddle channel settings' },
+    submit: { type: 'plain_text', text: 'Save' },
+    close: { type: 'plain_text', text: 'Cancel' },
+    blocks: [
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `Settings for <#${channel.channelId}> — channel owners can change these from the app home, and every change is logged.`,
+          },
+        ],
+      },
+      buildPlainTextInput({
+        blockId: 'huddle_channel_owners_block',
+        actionId: 'huddle_channel_owners_value',
+        label: 'Channel owner Slack IDs (comma separated)',
+        initialValue: owners,
+        placeholder: 'U012ABCDEF, U987654321',
+        optional: true,
+      }),
+      buildStaticSelect({
+        blockId: 'huddle_channel_tracking_block',
+        actionId: 'huddle_channel_tracking_value',
+        label: 'Track huddles in this channel',
+        options: [
+          { value: 'on', label: 'On — track, announce and review huddles', initial: !!channel.enabled },
+          { value: 'off', label: 'Off — stay completely silent', initial: !channel.enabled },
+        ],
+      }),
+      buildStaticSelect({
+        blockId: 'huddle_channel_replies_block',
+        actionId: 'huddle_channel_replies_value',
+        label: 'Reply when mentioned',
+        options: [
+          { value: 'on', label: 'On — answer mentions with the silly replies', initial: !!channel.autoReplies },
+          { value: 'off', label: 'Off — never reply to mentions', initial: !channel.autoReplies },
+        ],
+      }),
+      buildStaticSelect({
+        blockId: 'huddle_channel_restrict_block',
+        actionId: 'huddle_channel_restrict_value',
+        label: 'Who can trigger me',
+        options: [
+          { value: 'anyone', label: 'Anyone in the channel', initial: !channel.restrictTriggers },
+          { value: 'owners', label: 'Only the channel owners listed above', initial: !!channel.restrictTriggers },
+        ],
+      }),
+      buildStaticSelect({
+        blockId: 'huddle_channel_pause_block',
+        actionId: 'huddle_channel_pause_value',
+        label: 'Pause tracking temporarily',
+        options: HuddlePauseOptions.map((option) => ({
+          ...option,
+          initial: option.value === String(closestPause.value),
+        })),
+      }),
+    ],
+  };
+}
+
 export function buildDailyUpdateModal({ draft }) {
   return {
     type: 'modal',

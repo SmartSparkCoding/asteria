@@ -165,6 +165,18 @@ function getRowsChanged(database) {
   return bindAndFetchOne(database, 'SELECT changes() AS changes')?.changes ?? 0;
 }
 
+function parseOwnerIds(value) {
+  if (Array.isArray(value)) {
+    return value.filter((id) => typeof id === 'string' && id);
+  }
+  try {
+    const parsed = JSON.parse(value ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string' && id) : [];
+  } catch {
+    return [];
+  }
+}
+
 function normalizeParams(params) {
   return Object.fromEntries(
     Object.entries(params).map(([key, value]) => {
@@ -337,6 +349,17 @@ export async function createStore(databasePath, options = {}) {
     CREATE TABLE IF NOT EXISTS huddle_leaderboard (
       user_id TEXT PRIMARY KEY,
       points INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS huddle_channels (
+      channel_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      auto_replies INTEGER NOT NULL DEFAULT 1,
+      restrict_triggers INTEGER NOT NULL DEFAULT 0,
+      owner_ids TEXT NOT NULL DEFAULT '[]',
+      paused_until INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -1172,8 +1195,8 @@ export async function createStore(databasePath, options = {}) {
       );
     },
 
-    recordTriggerLog({ userId, action, detail = '', channelId = '' }) {
-      if (!userId) {
+    recordTriggerLog({ userId = '', action, detail = '', channelId = '' }) {
+      if (!action) {
         return;
       }
       bindAndRun(
@@ -1242,6 +1265,115 @@ export async function createStore(databasePath, options = {}) {
         ORDER BY channel_id
       `,
       ).map((row) => row.channel_id);
+    },
+
+    getHuddleChannel(channelId) {
+      if (!channelId) {
+        return null;
+      }
+      return bindAndFetchOne(database, 'SELECT * FROM huddle_channels WHERE channel_id = $channel_id', {
+        $channel_id: channelId,
+      });
+    },
+
+    listHuddleChannels() {
+      return bindAndFetchAll(database, 'SELECT * FROM huddle_channels ORDER BY channel_id');
+    },
+
+    /**
+     * Channels we know about: explicitly configured ones plus any channel we have
+     * recorded a huddle in. Unconfigured channels report sensible defaults.
+     */
+    listTrackedHuddleChannels() {
+      const configured = new Map(
+        bindAndFetchAll(database, 'SELECT * FROM huddle_channels').map((row) => [row.channel_id, row]),
+      );
+      for (const row of bindAndFetchAll(
+        database,
+        `
+        SELECT channel_id, MAX(channel_name) AS channel_name FROM huddles
+        WHERE channel_id != ''
+        GROUP BY channel_id
+      `,
+      )) {
+        if (!configured.has(row.channel_id)) {
+          configured.set(row.channel_id, {
+            channel_id: row.channel_id,
+            name: row.channel_name || '',
+            enabled: 1,
+            auto_replies: 1,
+            restrict_triggers: 0,
+            owner_ids: '[]',
+            paused_until: 0,
+            configured: false,
+          });
+        } else if (row.channel_name && !configured.get(row.channel_id).name) {
+          configured.get(row.channel_id).name = row.channel_name;
+        }
+      }
+      return [...configured.values()].map((row) => ({
+        ...row,
+        configured: row.configured !== false,
+        owner_ids: parseOwnerIds(row.owner_ids),
+      }));
+    },
+
+    upsertHuddleChannel({
+      channelId,
+      name = '',
+      enabled = true,
+      autoReplies = true,
+      restrictTriggers = false,
+      ownerIds = [],
+      pausedUntil = 0,
+    }) {
+      bindAndRun(
+        database,
+        `
+        INSERT INTO huddle_channels (
+          channel_id, name, enabled, auto_replies, restrict_triggers, owner_ids, paused_until, updated_at
+        )
+        VALUES ($channel_id, $name, $enabled, $auto_replies, $restrict_triggers, $owner_ids, $paused_until, CURRENT_TIMESTAMP)
+        ON CONFLICT(channel_id) DO UPDATE SET
+          name = excluded.name,
+          enabled = excluded.enabled,
+          auto_replies = excluded.auto_replies,
+          restrict_triggers = excluded.restrict_triggers,
+          owner_ids = excluded.owner_ids,
+          paused_until = excluded.paused_until,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+        {
+          $channel_id: channelId,
+          $name: name,
+          $enabled: enabled ? 1 : 0,
+          $auto_replies: autoReplies ? 1 : 0,
+          $restrict_triggers: restrictTriggers ? 1 : 0,
+          $owner_ids: JSON.stringify(Array.isArray(ownerIds) ? ownerIds : []),
+          $paused_until: Math.max(0, Math.floor(pausedUntil || 0)),
+        },
+      );
+      persist();
+    },
+
+    setHuddleChannelFlag(channelId, field, value) {
+      const allowed = new Set(['enabled', 'auto_replies', 'restrict_triggers', 'paused_until']);
+      if (!allowed.has(field)) {
+        return false;
+      }
+      bindAndRun(
+        database,
+        `
+        INSERT INTO huddle_channels (channel_id, ${field}) VALUES ($channel_id, $value)
+        ON CONFLICT(channel_id) DO UPDATE SET ${field} = excluded.${field}, updated_at = CURRENT_TIMESTAMP
+      `,
+        {
+          $channel_id: channelId,
+          $value: field === 'paused_until' ? Math.max(0, Math.floor(value || 0)) : value ? 1 : 0,
+        },
+      );
+      persist();
+      return true;
     },
 
     getUserHuddleState(userId) {

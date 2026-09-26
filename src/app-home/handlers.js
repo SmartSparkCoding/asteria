@@ -12,6 +12,7 @@ import { contentToMrkdwn, formatDailyQuestionMessage, parseMessageLink } from '.
 import { getLocalDateKey, isValidTimeZone, normalizeTimeValue } from '../utils/time.js';
 import {
   buildDailyUpdateModal,
+  buildHuddleChannelModal,
   buildPersonalChannelModal,
   buildPingGroupModal,
   buildQuestionPreviewModal,
@@ -40,6 +41,18 @@ function getCheckboxEnabled(viewState, blockId, actionId) {
 
 function getStaticSelectValue(viewState, blockId, actionId) {
   return viewState?.[blockId]?.[actionId]?.selected_option?.value ?? '';
+}
+
+const SLACK_USER_ID_PATTERN = /^[UW][0-9A-Z]{2,}$/;
+
+/** Accepts "U123, U456", "<@U123>", whitespace — keeps only plausible Slack IDs, in order. */
+function parseOwnerIdList(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.filter((id) => typeof id === 'string' && SLACK_USER_ID_PATTERN.test(id)))];
+  }
+  const text = typeof value === 'string' ? value : '';
+  const found = text.match(/[UW][0-9A-Z]{2,}/g) || [];
+  return [...new Set(found)];
 }
 
 function getConversationSelectValue(viewState, blockId, actionId) {
@@ -105,7 +118,45 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     return ids;
   }
 
-  async function publishTab(client, userId, tab, notice = '') {
+  function configuredChannelOwnerIds() {
+    return new Set(
+      store
+        .listHuddleChannels()
+        .flatMap((row) => (typeof row.owner_ids === 'string' ? parseOwnerIdList(row.owner_ids) : row.owner_ids || [])),
+    );
+  }
+
+  function isChannelOwner(userId) {
+    return configuredChannelOwnerIds().has(userId);
+  }
+
+  function mayConfigureChannel(userId, channelId) {
+    if (isOwner(userId)) {
+      return true;
+    }
+    const owners = parseOwnerIdList(store.getHuddleChannel(channelId)?.owner_ids);
+    return owners.includes(userId);
+  }
+
+  function visibleHuddleChannels(userId) {
+    const now = Math.floor(Date.now() / 1000);
+    return store
+      .listTrackedHuddleChannels()
+      .filter((channel) => isOwner(userId) || (channel.owner_ids || []).includes(userId))
+      .map((channel) => ({
+        channelId: channel.channel_id,
+        name: channel.name || '',
+        enabled: !!channel.enabled,
+        autoReplies: !!channel.auto_replies,
+        restrictTriggers: !!channel.restrict_triggers,
+        ownerIds: channel.owner_ids || [],
+        pausedUntil: channel.paused_until || 0,
+        paused: (channel.paused_until || 0) > now,
+        configured: channel.configured,
+      }));
+  }
+
+  async function publishTab(client, userId, category, sub, notice = '') {
     const settings = store.getSettings();
     const syncSettings = store.getSyncSettings();
     const draft = store.getDraft();
@@ -120,14 +171,20 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       .filter((huddle) => huddle.channel_id && huddle.status !== 'opted_out')
       .slice(0, 10);
     const leaderboard = store.listHuddleLeaderboard(20);
-    const isOwner = userId === settings.personal_channel_owner_id;
-    const logs = isOwner && tab === 'logs' ? store.listTriggerLog(30, await listBotChannelIds(client)) : [];
+    const isOwnerUser = userId === settings.personal_channel_owner_id;
+    const isChannelOwnerUser = !isOwnerUser && isChannelOwner(userId);
+    const logs =
+      isOwnerUser && category === 'huddles' && sub === 'logs'
+        ? store.listTriggerLog(30, await listBotChannelIds(client))
+        : [];
+    const huddleChannels = isOwnerUser || isChannelOwnerUser ? visibleHuddleChannels(userId) : [];
 
     await publishHome(
       client,
       userId,
       buildHomeView({
-        tab,
+        category,
+        sub,
         settings,
         syncSettings,
         draft,
@@ -135,9 +192,11 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
         recentQuestions,
         notice,
         huddles,
+        huddleChannels,
         leaderboard,
         logs,
-        isOwner,
+        isOwner: isOwnerUser,
+        isChannelOwner: isChannelOwnerUser,
       }),
     );
   }
@@ -146,11 +205,186 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     return userId === store.getSettings().personal_channel_owner_id;
   }
 
-  async function handleNavigation(tab, { ack, body, client }) {
+  async function handleNavigation(category, sub, { ack, body, client }) {
     await ack();
-    const settings = store.getSettings();
-    const activeTab = body.user.id === settings.personal_channel_owner_id ? tab : 'leaderboard';
-    await publishTab(client, body.user.id, activeTab);
+    const appOwner = isOwner(body.user.id);
+    const channelOwner = !appOwner && isChannelOwner(body.user.id);
+    if (!appOwner && !channelOwner) {
+      await publishTab(client, body.user.id, 'huddles', 'leaderboard');
+      return;
+    }
+    const nextCategory = category === 'channels' && !appOwner ? 'huddles' : category;
+    await publishTab(client, body.user.id, nextCategory, sub);
+  }
+
+  function describeChannelChange(before, after) {
+    const changes = [];
+    if (before.enabled !== after.enabled) {
+      changes.push(`tracking ${after.enabled ? 'on' : 'off'}`);
+    }
+    if (before.autoReplies !== after.autoReplies) {
+      changes.push(`auto replies ${after.autoReplies ? 'on' : 'off'}`);
+    }
+    if (before.restrictTriggers !== after.restrictTriggers) {
+      changes.push(`trigger access ${after.restrictTriggers ? 'owners only' : 'anyone'}`);
+    }
+    if (before.pausedUntil !== after.pausedUntil) {
+      changes.push(after.pausedUntil > Math.floor(Date.now() / 1000) ? 'paused' : 'resumed');
+    }
+    if (before.ownerIds.join(',') !== after.ownerIds.join(',')) {
+      changes.push(
+        after.ownerIds.length > 0
+          ? `owners set to ${after.ownerIds.map((id) => `<@${id}>`).join(' ')}`
+          : 'owners cleared',
+      );
+    }
+    return changes.join(', ') || 'no changes';
+  }
+
+  function currentChannelState(channelId) {
+    const row = store.getHuddleChannel(channelId);
+    return {
+      enabled: !!row?.enabled,
+      autoReplies: !!row?.auto_replies,
+      restrictTriggers: !!row?.restrict_triggers,
+      pausedUntil: Number(row?.paused_until) || 0,
+      ownerIds: parseOwnerIdList(row?.owner_ids),
+      name: row?.name || '',
+    };
+  }
+
+  function logChannelConfigChange(userId, channelId, before, after) {
+    store.recordTriggerLog({
+      userId,
+      action: 'huddle_channel_config',
+      detail: `${channelId}: ${describeChannelChange(before, after)}`,
+      channelId,
+    });
+  }
+
+  async function applyChannelConfigChange({ ack, body, client, channelId, mutate }) {
+    await ack();
+    if (!channelId) {
+      return;
+    }
+    if (!mayConfigureChannel(body.user.id, channelId)) {
+      return;
+    }
+    const before = currentChannelState(channelId);
+    mutate();
+    const after = currentChannelState(channelId);
+    logChannelConfigChange(body.user.id, channelId, before, after);
+    await publishTab(client, body.user.id, 'huddles', 'huddle-channels', 'Saved :white_check_mark:');
+  }
+
+  async function handleToggleTracking({ ack, body, client }) {
+    const channelId = body?.actions?.[0]?.value;
+    const next = !currentChannelState(channelId).enabled;
+    await applyChannelConfigChange({
+      ack,
+      body,
+      client,
+      channelId,
+      mutate: () => store.setHuddleChannelFlag(channelId, 'enabled', next),
+    });
+  }
+
+  async function handleToggleAutoReplies({ ack, body, client }) {
+    const channelId = body?.actions?.[0]?.value;
+    const next = !currentChannelState(channelId).autoReplies;
+    await applyChannelConfigChange({
+      ack,
+      body,
+      client,
+      channelId,
+      mutate: () => store.setHuddleChannelFlag(channelId, 'auto_replies', next),
+    });
+  }
+
+  async function handleToggleRestrict({ ack, body, client }) {
+    const channelId = body?.actions?.[0]?.value;
+    const next = !currentChannelState(channelId).restrictTriggers;
+    await applyChannelConfigChange({
+      ack,
+      body,
+      client,
+      channelId,
+      mutate: () => store.setHuddleChannelFlag(channelId, 'restrict_triggers', next),
+    });
+  }
+
+  async function handlePauseChannel({ ack, body, client }) {
+    const raw = body?.actions?.[0]?.value || '';
+    const [channelId, minutesRaw] = raw.split(':');
+    const minutes = Number(minutesRaw);
+    if (!channelId || !Number.isFinite(minutes) || minutes <= 0) {
+      await ack();
+      return;
+    }
+    await applyChannelConfigChange({
+      ack,
+      body,
+      client,
+      channelId,
+      mutate: () => store.setHuddleChannelFlag(channelId, 'paused_until', Math.floor(Date.now() / 1000) + minutes * 60),
+    });
+  }
+
+  async function handleResumeChannel({ ack, body, client }) {
+    const channelId = body?.actions?.[0]?.value;
+    await applyChannelConfigChange({
+      ack,
+      body,
+      client,
+      channelId,
+      mutate: () => store.setHuddleChannelFlag(channelId, 'paused_until', 0),
+    });
+  }
+
+  async function handleOpenHuddleChannelConfig({ ack, body, client }) {
+    await ack();
+    const channelId = body?.actions?.[0]?.value;
+    if (!channelId || !mayConfigureChannel(body.user.id, channelId)) {
+      return;
+    }
+    const state = currentChannelState(channelId);
+    await openModal(
+      client,
+      body.trigger_id,
+      buildHuddleChannelModal({
+        channel: { channelId, ...state },
+      }),
+    );
+  }
+
+  async function handleHuddleChannelConfigSubmit({ ack, body, client, view }) {
+    await ack();
+    const channelId = view?.private_metadata || body?.view?.private_metadata || '';
+    if (!channelId || !mayConfigureChannel(body.user.id, channelId)) {
+      return;
+    }
+    const values = body?.view?.state?.values || {};
+    const ownerIds = parseOwnerIdList(values.huddle_channel_owners_block?.huddle_channel_owners_value?.value);
+    const tracking = values.huddle_channel_tracking_block?.huddle_channel_tracking_value?.selected_option?.value;
+    const replies = values.huddle_channel_replies_block?.huddle_channel_replies_value?.selected_option?.value;
+    const restrict = values.huddle_channel_restrict_block?.huddle_channel_restrict_value?.selected_option?.value;
+    const pauseMinutes = Number(
+      values.huddle_channel_pause_block?.huddle_channel_pause_value?.selected_option?.value ?? '0',
+    );
+    const before = currentChannelState(channelId);
+    store.upsertHuddleChannel({
+      channelId,
+      name: before.name,
+      enabled: tracking !== 'off',
+      autoReplies: replies !== 'off',
+      restrictTriggers: restrict === 'owners',
+      ownerIds,
+      pausedUntil:
+        Number.isFinite(pauseMinutes) && pauseMinutes > 0 ? Math.floor(Date.now() / 1000) + pauseMinutes * 60 : 0,
+    });
+    const after = currentChannelState(channelId);
+    logChannelConfigChange(body.user.id, channelId, before, after);
+    await publishTab(client, body.user.id, 'huddles', 'huddle-channels', 'Saved :white_check_mark:');
   }
 
   async function handleOpenDailyUpdateModal({ ack, body, client }) {
@@ -241,7 +475,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       daily_update_ping_user_group_id: getStaticSelectValue(viewState, 'ping_group_block', 'select_ping_user_group'),
     });
 
-    await publishTab(client, body.user.id, 'settings', ':white_check_mark: Ping group saved.');
+    await publishTab(client, body.user.id, 'channels', 'settings', ':white_check_mark: Ping group saved.');
   }
 
   async function handleComposeDailyUpdateSubmit({ ack, body, view, client }) {
@@ -260,6 +494,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     await publishTab(
       client,
       body.user.id,
+      'channels',
       'daily-update',
       ':white_check_mark: Draft saved. Send it from the Daily Update tab.',
     );
@@ -276,7 +511,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       daily_update_thread_message: getRichTextInputValue(viewState, 'thread_message_block', 'thread_message_content'),
     });
 
-    await publishTab(client, body.user.id, 'daily-update', ':white_check_mark: Thread message saved.');
+    await publishTab(client, body.user.id, 'channels', 'daily-update', ':white_check_mark: Thread message saved.');
   }
 
   async function handleEditWelcomeMessageSubmit({ ack, body, view, client }) {
@@ -290,7 +525,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       welcome_message_content: getRichTextInputValue(viewState, 'welcome_message_block', 'welcome_message_content'),
     });
 
-    await publishTab(client, body.user.id, 'welcomer', ':white_check_mark: Welcome message saved.');
+    await publishTab(client, body.user.id, 'channels', 'welcomer', ':white_check_mark: Welcome message saved.');
   }
 
   async function handleEditPersonalChannelSubmit({ ack, body, view, client }) {
@@ -304,7 +539,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       personal_channel_id: getConversationSelectValue(viewState, 'personal_channel_block', 'personal_channel_id'),
     });
 
-    await publishTab(client, body.user.id, 'settings', ':white_check_mark: Personal channel saved.');
+    await publishTab(client, body.user.id, 'channels', 'settings', ':white_check_mark: Personal channel saved.');
   }
 
   async function handleSendDailyUpdate({ ack, body, client, logger }) {
@@ -315,6 +550,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'daily-update',
         ':warning: Only the configured owner can send the Daily Update.',
       );
@@ -336,6 +572,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'daily-update',
         ':x: Compose a Daily Update first using the Compose button.',
       );
@@ -346,6 +583,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'daily-update',
         ':x: Configure the personal channel and Daily Update ping group first.',
       );
@@ -407,12 +645,19 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
         sent_by_user_id: body.user.id,
       });
       store.clearDraft();
-      await publishTab(client, body.user.id, 'daily-update', ':white_check_mark: Daily Update sent successfully.');
+      await publishTab(
+        client,
+        body.user.id,
+        'channels',
+        'daily-update',
+        ':white_check_mark: Daily Update sent successfully.',
+      );
     } catch (error) {
       logger.error('Failed to send Daily Update', error);
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'daily-update',
         ':x: Asteria could not send the Daily Update. Your draft was preserved.',
       );
@@ -426,6 +671,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'daily-question',
         ':warning: Only the configured owner can change Daily Question settings.',
       );
@@ -448,7 +694,13 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       ),
     });
 
-    await publishTab(client, body.user.id, 'daily-question', ':white_check_mark: Daily Question settings saved.');
+    await publishTab(
+      client,
+      body.user.id,
+      'channels',
+      'daily-question',
+      ':white_check_mark: Daily Question settings saved.',
+    );
   }
 
   async function handleOpenQuestionTestModal({ ack, body, client }) {
@@ -524,10 +776,22 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
         messageTs: response.messageTs,
         sentAtUtc: new Date().toISOString(),
       });
-      await publishTab(client, body.user.id, 'daily-question', ':white_check_mark: Test Daily Question sent.');
+      await publishTab(
+        client,
+        body.user.id,
+        'channels',
+        'daily-question',
+        ':white_check_mark: Test Daily Question sent.',
+      );
     } catch (error) {
       logger.error('Failed to send a test Daily Question', error);
-      await publishTab(client, body.user.id, 'daily-question', ':x: Asteria could not send the test Daily Question.');
+      await publishTab(
+        client,
+        body.user.id,
+        'channels',
+        'daily-question',
+        ':x: Asteria could not send the test Daily Question.',
+      );
     }
   }
 
@@ -538,6 +802,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'welcomer',
         ':warning: Only the configured owner can change Welcomer settings.',
       );
@@ -552,7 +817,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       rules_canvas_url: rulesCanvasUrl,
     });
 
-    await publishTab(client, body.user.id, 'welcomer', ':white_check_mark: Welcomer settings saved.');
+    await publishTab(client, body.user.id, 'channels', 'welcomer', ':white_check_mark: Welcomer settings saved.');
   }
 
   async function handleSaveGeneralSettings({ ack, body, client }) {
@@ -562,6 +827,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'settings',
         ':warning: Only the configured owner can change general settings.',
       );
@@ -579,6 +845,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'settings',
         ':x: Please enter a valid IANA timezone such as Europe/London or America/New_York.',
       );
@@ -596,14 +863,20 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       daily_update_reminder_time: reminderTime,
     });
 
-    await publishTab(client, body.user.id, 'settings', ':white_check_mark: General settings saved.');
+    await publishTab(client, body.user.id, 'channels', 'settings', ':white_check_mark: General settings saved.');
   }
 
   async function handleSaveSyncSettings({ ack, body, client }) {
     await ack();
     const settings = store.getSettings();
     if (body.user.id !== settings.personal_channel_owner_id) {
-      await publishTab(client, body.user.id, 'sync', ':warning: Only the configured owner can change sync settings.');
+      await publishTab(
+        client,
+        body.user.id,
+        'channels',
+        'sync',
+        ':warning: Only the configured owner can change sync settings.',
+      );
       return;
     }
 
@@ -626,7 +899,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     }
     store.updateSyncSettings(patch);
 
-    await publishTab(client, body.user.id, 'sync', ':white_check_mark: Sync settings saved.');
+    await publishTab(client, body.user.id, 'channels', 'sync', ':white_check_mark: Sync settings saved.');
   }
 
   async function handleSaveHomeAssistantSettings({ ack, body, client }) {
@@ -636,6 +909,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'home-assistant',
         ':warning: Only the configured owner can change Home Assistant settings.',
       );
@@ -653,7 +927,13 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       ),
     });
 
-    await publishTab(client, body.user.id, 'home-assistant', ':white_check_mark: Home Assistant settings saved.');
+    await publishTab(
+      client,
+      body.user.id,
+      'channels',
+      'home-assistant',
+      ':white_check_mark: Home Assistant settings saved.',
+    );
   }
 
   async function handleTestHomeAssistantSteps({ ack, body, client }) {
@@ -663,6 +943,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'home-assistant',
         ':warning: Only the configured owner can test Home Assistant.',
       );
@@ -675,6 +956,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       await publishTab(
         client,
         body.user.id,
+        'channels',
         'home-assistant',
         ':x: Configure the Home Assistant URL, token, and steps entity first.',
       );
@@ -682,13 +964,20 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     }
 
     if (result.error) {
-      await publishTab(client, body.user.id, 'home-assistant', `:x: Could not fetch steps: ${result.error}`);
+      await publishTab(
+        client,
+        body.user.id,
+        'channels',
+        'home-assistant',
+        `:x: Could not fetch steps: ${result.error}`,
+      );
       return;
     }
 
     await publishTab(
       client,
       body.user.id,
+      'channels',
       'home-assistant',
       `:white_check_mark: Current step count: *${result.steps}*`,
     );
@@ -699,8 +988,11 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       return;
     }
 
-    const defaultTab = isOwner(event.user) ? 'daily-update' : 'leaderboard';
-    await publishTab(client, event.user, defaultTab);
+    if (isOwner(event.user)) {
+      await publishTab(client, event.user, 'channels', 'daily-update');
+      return;
+    }
+    await publishTab(client, event.user, 'huddles', isChannelOwner(event.user) ? 'huddle-channels' : 'leaderboard');
   }
 
   async function handleMemberJoinedChannel({ event, client, logger }) {
@@ -850,7 +1142,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     const link = getInputValue(body.view?.state?.values, 'delete_message_link_block', 'delete_message_link');
     const parsed = parseMessageLink(link);
     if (!parsed) {
-      await publishTab(client, body.user.id, 'delete', "That doesn't look like a Slack message link.");
+      await publishTab(client, body.user.id, 'channels', 'delete', "That doesn't look like a Slack message link.");
       return;
     }
     store.recordTriggerLog({
@@ -861,23 +1153,48 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     });
     try {
       await client.chat.delete({ channel: parsed.channel, ts: parsed.ts });
-      await publishTab(client, body.user.id, 'delete', `Deleted <#${parsed.channel}> ts \`${parsed.ts}\`.`);
+      await publishTab(client, body.user.id, 'channels', 'delete', `Deleted <#${parsed.channel}> ts \`${parsed.ts}\`.`);
     } catch (error) {
       logger.error('Failed to delete message', error);
-      await publishTab(client, body.user.id, 'delete', "I couldn't delete that one — it may not be a message I sent.");
+      await publishTab(
+        client,
+        body.user.id,
+        'channels',
+        'delete',
+        "I couldn't delete that one — it may not be a message I sent.",
+      );
     }
   }
 
-  app.action('navigate_daily_update', (payload) => handleNavigation('daily-update', payload));
-  app.action('navigate_daily_question', (payload) => handleNavigation('daily-question', payload));
-  app.action('navigate_welcomer', (payload) => handleNavigation('welcomer', payload));
-  app.action('navigate_home_assistant', (payload) => handleNavigation('home-assistant', payload));
-  app.action('navigate_huddles', (payload) => handleNavigation('huddles', payload));
-  app.action('navigate_sync', (payload) => handleNavigation('sync', payload));
-  app.action('navigate_settings', (payload) => handleNavigation('settings', payload));
-  app.action('navigate_leaderboard', (payload) => handleNavigation('leaderboard', payload));
-  app.action('navigate_logs', (payload) => handleNavigation('logs', payload));
-  app.action('navigate_delete', (payload) => handleNavigation('delete', payload));
+  app.action('navigate_category_channels', (payload) => handleNavigation('channels', 'daily-update', payload));
+  app.action('navigate_category_huddles', (payload) => handleNavigation('huddles', 'huddle-channels', payload));
+  for (const sub of [
+    'daily-update',
+    'daily-question',
+    'welcomer',
+    'home-assistant',
+    'sync',
+    'settings',
+    'delete',
+    'huddle_channels',
+    'huddles',
+    'leaderboard',
+    'logs',
+  ]) {
+    app.action(`navigate_sub_${sub}`, (payload) => {
+      const value = payload?.body?.actions?.[0]?.value || '';
+      const [category, target] = value.includes('/') ? value.split('/') : ['huddles', sub.replace(/_/g, '-')];
+      return handleNavigation(category, target, payload);
+    });
+  }
+
+  app.action('huddle_channel_configure', handleOpenHuddleChannelConfig);
+  app.action('huddle_channel_toggle_tracking', handleToggleTracking);
+  app.action('huddle_channel_toggle_auto_replies', handleToggleAutoReplies);
+  app.action('huddle_channel_toggle_restrict', handleToggleRestrict);
+  app.action('huddle_channel_pause', handlePauseChannel);
+  app.action('huddle_channel_resume', handleResumeChannel);
+  app.view('huddle_channel_config_submit', handleHuddleChannelConfigSubmit);
   app.action('delete_message_submit', handleDeleteMessageSubmit);
   app.action('open_daily_update_modal', handleOpenDailyUpdateModal);
   app.action('open_thread_message_modal', handleOpenThreadMessageModal);
