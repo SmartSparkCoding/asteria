@@ -218,11 +218,6 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     const leftAt = nowEpochSeconds();
     store.setUserHuddleState({ userId, callId: '', isIn: false });
     store.upsertHuddleMember({ callId, userId, firstSeenAt: null, lastSeenAt: leftAt, isIn: false });
-    const othersStillIn = store.listHuddleMembers(callId).filter((member) => member.is_in && member.user_id !== userId);
-    if (othersStillIn.length > 0) {
-      return;
-    }
-    await finalizeHuddle(callId, leftAt);
   }
 
   async function handleUserHuddleChange({ event }) {
@@ -251,9 +246,6 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       return;
     }
     const existing = store.getHuddle(room.id);
-    if (existing?.status === 'opted_out') {
-      return;
-    }
     const endedAt = room.date_end || null;
     store.upsertHuddle({
       callId: room.id,
@@ -590,6 +582,18 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     }).catch((error) => {
       logger.error('Handle huddle mention', error);
     });
+  });
+
+  app.event('message_changed', (payload) => {
+    const message = payload?.message;
+    if (message?.subtype !== 'huddle_thread' || !message?.room?.id) {
+      return;
+    }
+    try {
+      handleHuddleThreadMessage(message);
+    } catch (error) {
+      logger.error('Handle huddle_thread close message', error);
+    }
   });
 
   app.event('member_joined_channel', (payload) => {

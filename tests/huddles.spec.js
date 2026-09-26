@@ -348,7 +348,28 @@ describe('huddle tracker integration', () => {
     });
     await flush();
 
-    assert.equal(store.getHuddle('R1').status, 'ended');
+    assert.equal(store.getHuddle('R1').status, 'active', 'a leave does not end the huddle');
+    assert.equal(client.chat.postMessage.mock.callCount(), 0, 'no prompt from a plain leave');
+
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        channel: 'Crandom',
+        ts: '172100.000000',
+        room: {
+          id: 'R1',
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 172000,
+          date_end: 172100,
+          thread_root_ts: '172000.000000',
+          channels: ['Crandom'],
+          participant_history: ['UOWNER'],
+        },
+      },
+    });
+    await flush();
+    assert.equal(store.getHuddle('R1').status, 'ended', 'the closing huddle_thread message ends it');
     assert.equal(client.chat.postMessage.mock.callCount(), 1);
     const prompt = client.chat.postMessage.mock.calls[0].arguments[0];
     assert.equal(prompt.channel, 'Crandom');
@@ -425,11 +446,19 @@ describe('huddle tracker integration', () => {
         },
       },
     });
-    await handlers['event:user_huddle_changed']({
-      event: {
-        user: {
-          id: 'U5',
-          profile: { huddle_state: 'not_in_a_huddle', huddle_state_call_id: 'R2' },
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        ts: '172800.000000',
+        room: {
+          id: 'R2',
+          call_family: 'huddle',
+          created_by: '',
+          date_start: 172000,
+          date_end: 172800,
+          thread_root_ts: '',
+          channels: [],
+          participant_history: ['U5'],
         },
       },
     });
@@ -483,7 +512,24 @@ describe('huddle tracker integration', () => {
       event: {
         user: {
           id: 'UOWNER',
-          profile: { huddle_state: 'not_in_a_huddle', huddle_state_call_id: 'R3' },
+          profile: { huddle_state: 'in_a_huddle', huddle_state_call_id: 'R3' },
+        },
+      },
+    });
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        channel: 'Cthr',
+        ts: '173500.000000',
+        room: {
+          id: 'R3',
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 173000,
+          date_end: 173500,
+          thread_root_ts: '173000.000000',
+          channels: ['Cthr'],
+          participant_history: ['UOWNER'],
         },
       },
     });
@@ -648,7 +694,29 @@ describe('huddle tracker integration', () => {
     await flush();
 
     assert.equal(client.chat.postMessage.mock.callCount(), 0, 'no review prompt for an opted-out huddle');
-    assert.equal(store.getHuddle('R5').status, 'ended', 'opted-out huddle still ends silently');
+    assert.equal(store.getHuddle('R5').status, 'opted_out', 'a plain leave does not end an opted-out huddle');
+
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        channel: 'Crandom',
+        ts: '172400.000000',
+        room: {
+          id: 'R5',
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 172000,
+          date_end: 172400,
+          thread_root_ts: '172000.000000',
+          channels: ['Crandom'],
+          participant_history: ['UOWNER'],
+        },
+      },
+    });
+    await flush();
+
+    assert.equal(store.getHuddle('R5').status, 'ended', 'opted-out huddle still ends silently on the closing message');
+    assert.equal(client.chat.postMessage.mock.callCount(), 0, 'still no review prompt for an opted-out huddle');
 
     await handlers['event:user_huddle_changed']({
       event: {
@@ -665,7 +733,7 @@ describe('huddle tracker integration', () => {
     tracker.stop();
   });
 
-  it('does not end the huddle while other members are still in it', async () => {
+  it('only ends when the closing huddle_thread message arrives, never on member leaves', async () => {
     const store = await createTestStore();
     const client = createBasicClient();
     const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
@@ -675,23 +743,38 @@ describe('huddle tracker integration', () => {
         event: { user: { id: user, profile: { huddle_state: 'in_a_huddle', huddle_state_call_id: 'Rmulti' } } },
       });
     }
+    for (const user of ['U1', 'U2']) {
+      await handlers['event:user_huddle_changed']({
+        event: { user: { id: user, profile: { huddle_state: 'not_in_a_huddle', huddle_state_call_id: 'Rmulti' } } },
+      });
+    }
+    await flush();
+
     assert.equal(store.listHuddleMembers('Rmulti').length, 2);
+    assert.equal(store.getHuddle('Rmulti').status, 'active', 'still active even after EVERY member leaves');
+    assert.equal(client.chat.postMessage.mock.callCount(), 0, 'no prompt from leaves');
 
-    await handlers['event:user_huddle_changed']({
-      event: { user: { id: 'U1', profile: { huddle_state: 'not_in_a_huddle', huddle_state_call_id: 'Rmulti' } } },
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        channel: 'Crandom',
+        ts: '172500.000000',
+        room: {
+          id: 'Rmulti',
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 172000,
+          date_end: 172500,
+          thread_root_ts: '172000.000000',
+          channels: ['Crandom'],
+          participant_history: ['U1', 'U2'],
+        },
+      },
     });
     await flush();
 
-    assert.equal(store.getHuddle('Rmulti').status, 'active', 'no finalize while U2 is still in the huddle');
-    assert.equal(client.chat.postMessage.mock.callCount(), 0);
-
-    await handlers['event:user_huddle_changed']({
-      event: { user: { id: 'U2', profile: { huddle_state: 'not_in_a_huddle', huddle_state_call_id: 'Rmulti' } } },
-    });
-    await flush();
-
-    assert.equal(store.getHuddle('Rmulti').status, 'ended', 'finalizes once the last member leaves');
-    assert.equal(client.chat.postMessage.mock.callCount(), 1, 'prompt only after the last member leaves');
+    assert.equal(store.getHuddle('Rmulti').status, 'ended', 'ends only on the closing message');
+    assert.equal(client.chat.postMessage.mock.callCount(), 1, 'prompt only from the closing message');
 
     tracker.stop();
   });
