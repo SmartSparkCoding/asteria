@@ -181,11 +181,7 @@ describe('App Home handlers', () => {
     assert.equal(client.views.publish.mock.callCount(), 1);
     assert.equal(client.chat.postMessage.mock.callCount(), 0);
     const publishArgs = client.views.publish.mock.calls[0].arguments[0];
-    assert(
-      publishArgs.view.blocks.some((block) =>
-        block.text?.text.includes('configured for another personal channel owner'),
-      ),
-    );
+    assert.equal(publishArgs.view.callback_id, 'asteria_home_leaderboard');
     assert(!publishArgs.view.blocks.some((block) => block.block_id === 'navigation_tabs'));
     store.close();
   });

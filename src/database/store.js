@@ -333,6 +333,20 @@ export async function createStore(databasePath, options = {}) {
       is_in INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS huddle_leaderboard (
+      user_id TEXT PRIMARY KEY,
+      points INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS trigger_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL DEFAULT '',
+      detail TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   const existingSettingColumns = bindAndFetchAll(database, 'PRAGMA table_info(app_settings)').map(
@@ -357,6 +371,11 @@ export async function createStore(databasePath, options = {}) {
   }
   if (!existingSettingColumns.includes('home_assistant_steps_entity')) {
     bindAndRun(database, "ALTER TABLE app_settings ADD COLUMN home_assistant_steps_entity TEXT NOT NULL DEFAULT ''");
+  }
+
+  const huddleColumns = bindAndFetchAll(database, 'PRAGMA table_info(huddles)').map((column) => column.name);
+  if (!huddleColumns.includes('last_reply_ts')) {
+    bindAndRun(database, "ALTER TABLE huddles ADD COLUMN last_reply_ts TEXT NOT NULL DEFAULT ''");
   }
 
   bindAndRun(
@@ -1097,6 +1116,86 @@ export async function createStore(databasePath, options = {}) {
       `,
         {
           $before_started_at: beforeStartedAt,
+        },
+      );
+    },
+
+    setHuddleLastReplyTs(callId, ts) {
+      bindAndRun(
+        database,
+        `
+        UPDATE huddles SET last_reply_ts = $ts, last_seen_at = CURRENT_TIMESTAMP
+        WHERE call_id = $call_id
+      `,
+        {
+          $call_id: callId,
+          $ts: ts,
+        },
+      );
+      persist();
+    },
+
+    awardHuddlePoints(userId, points) {
+      bindAndRun(
+        database,
+        `
+        INSERT INTO huddle_leaderboard (user_id, points, updated_at)
+        VALUES ($user_id, $points, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id) DO UPDATE SET
+          points = huddle_leaderboard.points + excluded.points,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+        {
+          $user_id: userId,
+          $points: Math.max(0, Math.floor(points)),
+        },
+      );
+      persist();
+    },
+
+    listHuddleLeaderboard(limit = 50) {
+      return bindAndFetchAll(
+        database,
+        `
+        SELECT user_id, points FROM huddle_leaderboard
+        ORDER BY points DESC, updated_at ASC, user_id ASC
+        LIMIT $limit
+      `,
+        {
+          $limit: Math.max(1, Math.min(100, limit)),
+        },
+      );
+    },
+
+    recordTriggerLog({ userId, action, detail = '' }) {
+      if (!userId) {
+        return;
+      }
+      bindAndRun(
+        database,
+        `
+        INSERT INTO trigger_log (user_id, action, detail, created_at)
+        VALUES ($user_id, $action, $detail, CURRENT_TIMESTAMP)
+      `,
+        {
+          $user_id: userId,
+          $action: action,
+          $detail: detail,
+        },
+      );
+      persist();
+    },
+
+    listTriggerLog(limit = 50) {
+      return bindAndFetchAll(
+        database,
+        `
+        SELECT id, user_id, action, detail, created_at FROM trigger_log
+        ORDER BY id DESC
+        LIMIT $limit
+      `,
+        {
+          $limit: Math.max(1, Math.min(100, limit)),
         },
       );
     },

@@ -1,3 +1,4 @@
+import { computeHuddlePoints } from './points.js';
 import {
   computeHuddleStats,
   formatDuration,
@@ -180,6 +181,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     if (!huddle) {
       return;
     }
+    await awardHuddlePoints(huddle);
     const members = store.listHuddleMembers(callId);
     const recipient = pickReviewRecipient(huddle, members, ownerId);
     if (!recipient) {
@@ -199,6 +201,40 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     }
   }
 
+  async function awardHuddlePoints(huddle) {
+    if (!huddle?.started_at || !huddle?.ended_at) {
+      return;
+    }
+    const members = store.listHuddleMembers(huddle.call_id);
+    if (members.length === 0) {
+      return;
+    }
+    let messageStats = null;
+    if (huddle.channel_id && huddle.thread_root_ts) {
+      try {
+        messageStats = await resolveHuddleThreadMessageStats({
+          client,
+          channelId: huddle.channel_id,
+          threadRootTs: huddle.thread_root_ts,
+          startedAt: huddle.started_at,
+          endedAt: huddle.ended_at,
+          memberIds: members.map((member) => member.user_id),
+        });
+      } catch (error) {
+        logger.error(`Failed to resolve message stats for ${huddle.call_id}`, error);
+      }
+    }
+    const awards = computeHuddlePoints({
+      huddle,
+      members,
+      participantHistory: parseParticipantHistory(huddle),
+      messageStats,
+    });
+    for (const [userId, entry] of awards) {
+      store.awardHuddlePoints(userId, entry.points);
+    }
+  }
+
   async function applyJoin(userId, callId) {
     const joinedAt = nowEpochSeconds();
     store.setUserHuddleState({ userId, callId, isIn: true });
@@ -212,12 +248,14 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       lastSeenAt: joinedAt,
       isIn: true,
     });
+    store.recordTriggerLog({ userId, action: 'huddle_join', detail: callId });
   }
 
   async function applyLeave(userId, callId) {
     const leftAt = nowEpochSeconds();
     store.setUserHuddleState({ userId, callId: '', isIn: false });
     store.upsertHuddleMember({ callId, userId, firstSeenAt: null, lastSeenAt: leftAt, isIn: false });
+    store.recordTriggerLog({ userId, action: 'huddle_leave', detail: callId });
   }
 
   async function handleUserHuddleChange({ event }) {
@@ -324,14 +362,39 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       return;
     }
     const replyClient = eventClient ?? client;
-    const postReply = (textOrBlocks) =>
-      replyClient.chat.postMessage({
+    const huddle = store.listHuddles().find((h) => h.thread_root_ts === threadTs);
+    store.recordTriggerLog({
+      userId: message?.user || '',
+      action: 'silly_request',
+      detail: threadTs || (message.channel ?? channel),
+    });
+    const postReply = async (textOrBlocks) => {
+      const updatePayload = {
+        ...(typeof textOrBlocks === 'string' ? { text: textOrBlocks } : textOrBlocks),
+      };
+      if (huddle?.channel_id && huddle?.thread_root_ts && huddle?.last_reply_ts) {
+        try {
+          await replyClient.chat.update({
+            channel: huddle.channel_id,
+            ts: huddle.last_reply_ts,
+            ...updatePayload,
+          });
+          return null;
+        } catch {
+          // fall back to a fresh reply
+        }
+      }
+      const response = await replyClient.chat.postMessage({
         channel: message.channel ?? channel,
         ...{ ...(threadTs ? { thread_ts: threadTs } : {}) },
-        ...(typeof textOrBlocks === 'string' ? { text: textOrBlocks } : textOrBlocks),
+        ...updatePayload,
       });
+      if (huddle && response?.ts) {
+        store.setHuddleLastReplyTs(huddle.call_id, response.ts);
+      }
+      return response;
+    };
 
-    const huddle = store.listHuddles().find((h) => h.thread_root_ts === threadTs);
     if (huddle?.status === 'active') {
       await postReply(buildSillyReply(huddle));
       return;
@@ -394,6 +457,23 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     await postReply(buildSillyReply(trackedHuddle || null));
   }
 
+  async function isHuddleStillLive(huddle, actionClient) {
+    if (!huddle?.channel_id || !huddle?.thread_root_ts) {
+      return true;
+    }
+    try {
+      const reply = await actionClient.conversations.replies({
+        channel: huddle.channel_id,
+        ts: huddle.thread_root_ts,
+        limit: 1,
+      });
+      const root = reply?.messages?.[0];
+      return !(root?.room?.date_end ?? 0);
+    } catch {
+      return true;
+    }
+  }
+
   async function handleTrackAgain({ ack, body, client: actionClient }) {
     if (ack) {
       await ack();
@@ -402,17 +482,55 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     if (!callId) {
       return;
     }
-    if (!store.reactivateHuddle(callId)) {
-      return;
-    }
+    const userId = body?.user?.id || '';
     const ts = body?.message?.thread_ts || body?.message?.ts;
     const channelId = body?.container?.channel_id ?? body?.channel?.id;
+    const huddle = store.getHuddle(callId);
+    const stillLive = await isHuddleStillLive(huddle, actionClient);
+    if (!stillLive) {
+      store.recordTriggerLog({ userId, action: 'huddle_track_again_denied', detail: callId });
+      if (ts && channelId) {
+        try {
+          await actionClient.chat.update({
+            channel: channelId,
+            ts,
+            text: "that huddle's already over 💀 :freddie-sleeping: - nothing to track",
+            blocks: [
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: "that huddle's already over 💀 :freddie-sleeping: - nothing to track",
+                },
+              },
+            ],
+          });
+        } catch (error) {
+          logger.error(`Failed to decline huddle re-tracking for ${callId}`, error);
+        }
+      }
+      return;
+    }
+    const reactivated = store.reactivateHuddle(callId);
+    if (!reactivated && store.getHuddle(callId)?.status !== 'active') {
+      return;
+    }
+    store.recordTriggerLog({ userId, action: 'huddle_track_again', detail: callId });
     if (ts && channelId) {
       try {
-        await actionClient.chat.postMessage({
+        await actionClient.chat.update({
           channel: channelId,
-          thread_ts: ts,
-          text: 'ok - im tracking again! 💚 :freddie-working:',
+          ts,
+          text: `thanks <@${userId}> for clicking me! im tracking again 💚 :freddie-working:`,
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `thanks <@${userId}> for clicking me! im tracking again 💚 :freddie-working:`,
+              },
+            },
+          ],
         });
       } catch (error) {
         logger.error(`Failed to confirm huddle tracking for ${callId}`, error);
@@ -437,6 +555,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       return;
     }
     await generateReview({ huddle, recipientUserId: body?.user?.id, actionClient });
+    store.recordTriggerLog({ userId: body?.user?.id, action: 'huddle_review_generated', detail: callId });
     const promptTs = body?.message?.ts;
     const promptChannelId = body?.container?.channel_id ?? body?.channel?.id;
     if (promptTs && promptChannelId) {
@@ -518,6 +637,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     if (!store.setHuddleOptedOut(callId)) {
       return;
     }
+    store.recordTriggerLog({ userId: body?.user?.id, action: 'huddle_opt_out', detail: callId });
     const ts = body?.message?.ts;
     const channelId = body?.container?.channel_id ?? body?.channel?.id;
     if (ts && channelId) {

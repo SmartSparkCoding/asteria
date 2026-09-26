@@ -1,6 +1,14 @@
-import { fetchUserGroups, sendDailyQuestion, sendDailyUpdate, sendWelcomeMessage, addUserToUserGroup, removeUserFromUserGroup, sendDirectMessage } from '../services/slack.js';
 import { createHomeAssistantService } from '../services/home-assistant.js';
-import { contentToMrkdwn, formatDailyQuestionMessage } from '../utils/messages.js';
+import {
+  addUserToUserGroup,
+  fetchUserGroups,
+  removeUserFromUserGroup,
+  sendDailyQuestion,
+  sendDailyUpdate,
+  sendDirectMessage,
+  sendWelcomeMessage,
+} from '../services/slack.js';
+import { contentToMrkdwn, formatDailyQuestionMessage, parseMessageLink } from '../utils/messages.js';
 import { getLocalDateKey, isValidTimeZone, normalizeTimeValue } from '../utils/time.js';
 import {
   buildDailyUpdateModal,
@@ -72,6 +80,9 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       .listHuddles()
       .filter((huddle) => huddle.channel_id && huddle.status !== 'opted_out')
       .slice(0, 10);
+    const leaderboard = store.listHuddleLeaderboard(20);
+    const isOwner = userId === settings.personal_channel_owner_id;
+    const logs = isOwner ? store.listTriggerLog(30) : [];
 
     await publishHome(
       client,
@@ -85,7 +96,9 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
         recentQuestions,
         notice,
         huddles,
-        isOwner: userId === settings.personal_channel_owner_id,
+        leaderboard,
+        logs,
+        isOwner,
       }),
     );
   }
@@ -97,7 +110,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
   async function handleNavigation(tab, { ack, body, client }) {
     await ack();
     const settings = store.getSettings();
-    const activeTab = body.user.id === settings.personal_channel_owner_id ? tab : 'daily-update';
+    const activeTab = body.user.id === settings.personal_channel_owner_id ? tab : 'leaderboard';
     await publishTab(client, body.user.id, activeTab);
   }
 
@@ -594,7 +607,11 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     store.updateSettings({
       home_assistant_url: getInputValue(viewState, 'home_assistant_url_block', 'home_assistant_url'),
       home_assistant_token: getInputValue(viewState, 'home_assistant_token_block', 'home_assistant_token'),
-      home_assistant_steps_entity: getInputValue(viewState, 'home_assistant_steps_entity_block', 'home_assistant_steps_entity'),
+      home_assistant_steps_entity: getInputValue(
+        viewState,
+        'home_assistant_steps_entity_block',
+        'home_assistant_steps_entity',
+      ),
     });
 
     await publishTab(client, body.user.id, 'home-assistant', ':white_check_mark: Home Assistant settings saved.');
@@ -604,7 +621,12 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     await ack();
     const settings = store.getSettings();
     if (body.user.id !== settings.personal_channel_owner_id) {
-      await publishTab(client, body.user.id, 'home-assistant', ':warning: Only the configured owner can test Home Assistant.');
+      await publishTab(
+        client,
+        body.user.id,
+        'home-assistant',
+        ':warning: Only the configured owner can test Home Assistant.',
+      );
       return;
     }
 
@@ -638,7 +660,8 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       return;
     }
 
-    await publishTab(client, event.user, 'daily-update');
+    const defaultTab = isOwner(event.user) ? 'daily-update' : 'leaderboard';
+    await publishTab(client, event.user, defaultTab);
   }
 
   async function handleMemberJoinedChannel({ event, client, logger }) {
@@ -749,6 +772,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     if (groupId) {
       store.recordGroupOptOut({ userId, userGroupId: groupId, optedOutAtUtc: new Date().toISOString() });
     }
+    store.recordTriggerLog({ userId: body?.user?.id, action: 'daily_update_opt_out', detail: groupId });
 
     try {
       await removeUserFromUserGroup(client, groupId, userId);
@@ -779,6 +803,31 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     }
   }
 
+  async function handleDeleteMessageSubmit({ ack, body, client, logger }) {
+    await ack();
+    if (!isOwner(body.user.id)) {
+      return;
+    }
+    const link = getInputValue(body.view?.state?.values, 'delete_message_link_block', 'delete_message_link');
+    const parsed = parseMessageLink(link);
+    if (!parsed) {
+      await publishTab(client, body.user.id, 'delete', "That doesn't look like a Slack message link.");
+      return;
+    }
+    store.recordTriggerLog({
+      userId: body.user.id,
+      action: 'delete_message',
+      detail: `${parsed.channel}/${parsed.ts}`,
+    });
+    try {
+      await client.chat.delete({ channel: parsed.channel, ts: parsed.ts });
+      await publishTab(client, body.user.id, 'delete', `Deleted <#${parsed.channel}> ts \`${parsed.ts}\`.`);
+    } catch (error) {
+      logger.error('Failed to delete message', error);
+      await publishTab(client, body.user.id, 'delete', "I couldn't delete that one — it may not be a message I sent.");
+    }
+  }
+
   app.action('navigate_daily_update', (payload) => handleNavigation('daily-update', payload));
   app.action('navigate_daily_question', (payload) => handleNavigation('daily-question', payload));
   app.action('navigate_welcomer', (payload) => handleNavigation('welcomer', payload));
@@ -786,6 +835,10 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
   app.action('navigate_huddles', (payload) => handleNavigation('huddles', payload));
   app.action('navigate_sync', (payload) => handleNavigation('sync', payload));
   app.action('navigate_settings', (payload) => handleNavigation('settings', payload));
+  app.action('navigate_leaderboard', (payload) => handleNavigation('leaderboard', payload));
+  app.action('navigate_logs', (payload) => handleNavigation('logs', payload));
+  app.action('navigate_delete', (payload) => handleNavigation('delete', payload));
+  app.action('delete_message_submit', handleDeleteMessageSubmit);
   app.action('open_daily_update_modal', handleOpenDailyUpdateModal);
   app.action('open_thread_message_modal', handleOpenThreadMessageModal);
   app.action('open_welcome_message_modal', handleOpenWelcomeMessageModal);

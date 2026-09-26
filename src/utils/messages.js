@@ -231,3 +231,15 @@ export function toRichTextInitialValue(value) {
 
   return { type: 'rich_text', elements };
 }
+
+export function parseMessageLink(link) {
+  const match = String(link || '').match(/\/archives\/([A-Z0-9]+)\/p([0-9]{13,18})/);
+  if (!match) {
+    return null;
+  }
+  const [, channel, digits] = match;
+  if (digits.length < 7) {
+    return null;
+  }
+  return { channel, ts: `${digits.slice(0, -6)}.${digits.slice(-6)}` };
+}

@@ -7,7 +7,10 @@ function toBooleanString(value) {
   return value ? 'ON' : 'OFF';
 }
 
-function buildTabs(activeTab) {
+function buildTabs(activeTab, isOwner) {
+  if (!isOwner) {
+    return null;
+  }
   const tabs = [
     { id: 'daily-update', label: 'Daily Update' },
     { id: 'daily-question', label: 'Daily Question' },
@@ -16,6 +19,9 @@ function buildTabs(activeTab) {
     { id: 'huddles', label: 'Huddles' },
     { id: 'sync', label: 'Sync' },
     { id: 'settings', label: 'Settings' },
+    { id: 'leaderboard', label: 'Leaderboard' },
+    { id: 'logs', label: 'Logs' },
+    { id: 'delete', label: 'Delete' },
   ];
 
   return {
@@ -52,38 +58,6 @@ function buildBanner(notice) {
   ];
 }
 
-function buildReadOnlyView(settings) {
-  return {
-    type: 'home',
-    callback_id: 'asteria_home_read_only',
-    blocks: [
-      {
-        type: 'header',
-        text: {
-          type: 'plain_text',
-          text: 'Asteria',
-        },
-      },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: 'Asteria is configured for another personal channel owner. If you are the owner, ask them to update `PERSONAL_CHANNEL_OWNER_ID` in the environment and restart the app.',
-        },
-      },
-      {
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: `Configured owner: <@${settings.personal_channel_owner_id || 'unknown'}>`,
-          },
-        ],
-      },
-    ],
-  };
-}
-
 function buildTopSummary(settings) {
   const summaryLines = [
     `Timezone: *${settings.timezone}*`,
@@ -110,7 +84,7 @@ function buildDailyUpdateView({ settings, draft, questionPreview, notice }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('daily-update'),
+      buildTabs('daily-update', true),
       buildTopSummary(settings),
       {
         type: 'section',
@@ -242,7 +216,7 @@ function buildDailyQuestionView({ settings, notice, recentQuestions }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('daily-question'),
+      buildTabs('daily-question', true),
       {
         type: 'section',
         text: {
@@ -399,7 +373,7 @@ function buildWelcomerView({ settings, notice }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('welcomer'),
+      buildTabs('welcomer', true),
       {
         type: 'section',
         text: {
@@ -514,7 +488,7 @@ function buildSyncView({ settings, notice, isOwner }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('sync'),
+      buildTabs('sync', true),
       {
         type: 'section',
         text: {
@@ -658,7 +632,9 @@ function buildSyncView({ settings, notice, isOwner }) {
 }
 
 function buildHomeAssistantView({ settings, notice, isOwner, stepsSummary }) {
-  const configured = Boolean(settings.home_assistant_url && settings.home_assistant_token && settings.home_assistant_steps_entity);
+  const configured = Boolean(
+    settings.home_assistant_url && settings.home_assistant_token && settings.home_assistant_steps_entity,
+  );
 
   return {
     type: 'home',
@@ -666,7 +642,7 @@ function buildHomeAssistantView({ settings, notice, isOwner, stepsSummary }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('home-assistant'),
+      buildTabs('home-assistant', true),
       {
         type: 'section',
         text: {
@@ -777,7 +753,7 @@ function buildSettingsView({ settings, notice }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('settings'),
+      buildTabs('settings', true),
       {
         type: 'section',
         text: {
@@ -930,7 +906,8 @@ function formatHuddleSummary(huddle, timezone) {
     ? DateTime.fromSeconds(huddle.started_at, { zone: timezone || 'UTC' }).toFormat('d LLL yyyy, HH:mm')
     : 'unknown date';
   const channelId = huddle.channel_id || '';
-  const channel = channelId.startsWith('D') || channelId.startsWith('G') ? 'a DM' : channelId ? `<#${channelId}>` : 'unknown channel';
+  const channel =
+    channelId.startsWith('D') || channelId.startsWith('G') ? 'a DM' : channelId ? `<#${channelId}>` : 'unknown channel';
   const status = huddle.status === 'active' ? ' · :large_blue_circle: active now' : '';
   return `• ${channel} · ${startLabel}${status}`;
 }
@@ -942,7 +919,7 @@ export function buildHuddlesView({ huddles, notice, timezone }) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
       ...buildBanner(notice),
-      buildTabs('huddles'),
+      buildTabs('huddles', true),
       {
         type: 'section',
         text: {
@@ -973,6 +950,141 @@ export function buildHuddlesView({ huddles, notice, timezone }) {
   };
 }
 
+export function buildLeaderboardView({ leaderboard, notice, isOwner }) {
+  const ranked = (leaderboard || []).map((row) => `• <@${row.user_id}> · *${row.points} pts*`);
+
+  return {
+    type: 'home',
+    callback_id: 'asteria_home_leaderboard',
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      ...buildBanner(notice),
+      ...(isOwner ? [buildTabs('leaderboard', true)] : []),
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'Huddle points: stay in huddles, beat the longest/shortest message prizes, and start huddles to climb the board.',
+        },
+      },
+      ...(ranked.length > 0
+        ? [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: ranked.join('\n'),
+              },
+            },
+          ]
+        : [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: '_No huddle points awarded yet._',
+              },
+            },
+          ]),
+    ],
+  };
+}
+
+function formatTriggerLogEntry(entry, timezone) {
+  const timeLabel = entry.created_at
+    ? DateTime.fromSQL(entry.created_at, { zone: timezone || 'UTC' }).toFormat('d LLL HH:mm')
+    : 'unknown time';
+  const actor = entry.user_id ? `<@${entry.user_id}>` : '_the bot_';
+  const detail = entry.detail ? ` · ${entry.detail}` : '';
+  return `• ${timeLabel} · ${actor} · *${entry.action}*${detail}`;
+}
+
+export function buildLogsView({ logs, notice, timezone }) {
+  const lines = (logs || []).map((entry) => formatTriggerLogEntry(entry, timezone));
+
+  return {
+    type: 'home',
+    callback_id: 'asteria_home_logs',
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      ...buildBanner(notice),
+      buildTabs('logs', true),
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'Recent triggers — who started, joined, left, opted out, or asked for huddles stuff.',
+        },
+      },
+      ...(lines.length > 0
+        ? [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: lines.join('\n'),
+              },
+            },
+          ]
+        : [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: '_No triggers logged yet._',
+              },
+            },
+          ]),
+    ],
+  };
+}
+
+export function buildDeleteView({ notice }) {
+  return {
+    type: 'home',
+    callback_id: 'asteria_home_delete',
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      ...buildBanner(notice),
+      buildTabs('delete', true),
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'Paste a link to any message I (Asteria) sent and I will delete it — no matter what it is or where it lives.',
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'delete_message_link_block',
+        label: {
+          type: 'plain_text',
+          text: 'Message link',
+        },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'delete_message_link',
+          placeholder: {
+            type: 'plain_text',
+            text: 'https://hackclub.slack.com/archives/C09RQFJCJ4U/p1790380910506989',
+          },
+        },
+      },
+      {
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            action_id: 'delete_message_submit',
+            text: { type: 'plain_text', text: 'Delete it' },
+            style: 'danger',
+          },
+        ],
+      },
+    ],
+  };
+}
+
 export function buildHomeView({
   tab,
   settings,
@@ -983,9 +1095,11 @@ export function buildHomeView({
   isOwner,
   syncSettings,
   huddles,
+  leaderboard,
+  logs,
 }) {
   if (!isOwner) {
-    return buildReadOnlyView(settings);
+    return buildLeaderboardView({ leaderboard: leaderboard || [], notice, isOwner: false });
   }
 
   if (tab === 'daily-question') {
@@ -1014,6 +1128,18 @@ export function buildHomeView({
 
   if (tab === 'settings') {
     return buildSettingsView({ settings, notice });
+  }
+
+  if (tab === 'leaderboard') {
+    return buildLeaderboardView({ leaderboard: leaderboard || [], notice, isOwner: true });
+  }
+
+  if (tab === 'logs') {
+    return buildLogsView({ logs: logs || [], notice, timezone: settings.timezone });
+  }
+
+  if (tab === 'delete') {
+    return buildDeleteView({ notice });
   }
 
   return buildDailyUpdateView({ settings, draft, questionPreview, notice });

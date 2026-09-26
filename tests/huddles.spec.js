@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, it, mock } from 'node:test';
 import { buildHuddlesView } from '../src/app-home/views.js';
 import { createStore } from '../src/database/store.js';
+import { computeHuddlePoints } from '../src/huddles/points.js';
 import {
   computeHuddleStats,
   extractMessageText,
@@ -913,9 +914,16 @@ describe('huddle tracker integration', () => {
     await flush();
 
     assert.equal(store.getHuddle('Ropt').status, 'active');
-    assert.equal(client.chat.postMessage.mock.callCount(), 1);
-    assert.equal(client.chat.postMessage.mock.calls[0].arguments[0].thread_ts, '172000.000000');
-    assert(client.chat.postMessage.mock.calls[0].arguments[0].text.includes('tracking again'));
+    assert.equal(client.chat.postMessage.mock.callCount(), 0, 'confirmation replaces the button message');
+    const confirmation = client.chat.update.mock.calls[0];
+    assert(confirmation, 'confirmation sent via chat.update');
+    assert.equal(confirmation.arguments[0].ts, '172000.000000');
+    assert(confirmation.arguments[0].text.includes('thanks <@UOWNER>'), 'thanks the clicker by name');
+    assert(confirmation.arguments[0].text.includes('tracking again'));
+    assert(
+      store.listTriggerLog().some((entry) => entry.action === 'huddle_track_again' && entry.user_id === 'UOWNER'),
+      'logs the track-again trigger',
+    );
 
     tracker.stop();
   });
@@ -1032,5 +1040,156 @@ describe('huddle tracker integration', () => {
     assert.equal(client.chat.postMessage.mock.callCount(), 0);
 
     tracker.stop();
+  });
+
+  it('refuses to re-track when Slack says the huddle is over', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    client.conversations.replies = mock.fn(async () => ({
+      messages: [{ room: { id: 'Rend', date_end: 200000 } }],
+    }));
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({
+      callId: 'Rend',
+      channelId: 'Crandom',
+      createdBy: 'UOWNER',
+      startedAt: 172000,
+      endedAt: 200000,
+      threadRootTs: '172000.000000',
+      participantHistory: ['UOWNER'],
+    });
+    store.setHuddleStatus('Rend', 'ended', 200000);
+
+    await handlers['action:huddle_track_again']({
+      ack: mock.fn(),
+      body: {
+        user: { id: 'UOWNER' },
+        actions: [{ value: 'Rend' }],
+        message: { ts: '172100.000000', thread_ts: '172100.000000' },
+        container: { channel_id: 'Crandom' },
+        channel: { id: 'Crandom' },
+      },
+      client,
+    });
+    await flush();
+
+    assert.equal(store.getHuddle('Rend').status, 'ended', 'does not re-activate a truly over huddle');
+    const denial = client.chat.update.mock.calls[0];
+    assert(denial, 'replaces the button message');
+    assert(denial.arguments[0].text.includes('already over'));
+    assert(
+      store.listTriggerLog().some((entry) => entry.action === 'huddle_track_again_denied'),
+      'logs the denial',
+    );
+
+    tracker.stop();
+  });
+
+  it('replaces its previous reply in a thread when mentioned again', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({
+      callId: 'Rrep',
+      channelId: 'Crandom',
+      createdBy: 'UOWNER',
+      startedAt: 172000,
+      endedAt: null,
+      threadRootTs: '172000.000000',
+      participantHistory: ['UOWNER'],
+    });
+
+    const mention = () =>
+      handlers.message({
+        message: {
+          type: 'message',
+          channel: 'Crandom',
+          user: 'UOWNER',
+          thread_ts: '172000.000000',
+          text: '<@BOTUSER> hey watch me',
+        },
+      });
+
+    mention();
+    await flush();
+    assert.equal(client.chat.postMessage.mock.callCount(), 1, 'first reply posts fresh');
+    const firstTs = store.getHuddle('Rrep').last_reply_ts;
+    assert(firstTs, 'persists the reply ts');
+
+    mention();
+    await flush();
+    assert.equal(client.chat.postMessage.mock.callCount(), 1, 'no second stacking reply');
+    const replacement = client.chat.update.mock.calls[0];
+    assert(replacement, 'updates the previous reply instead');
+    assert.equal(replacement.arguments[0].channel, 'Crandom');
+    assert.equal(replacement.arguments[0].ts, firstTs);
+
+    tracker.stop();
+  });
+
+  it('awards leaderboard points when a tracked huddle ends', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    await handlers['event:user_huddle_changed']({
+      event: { user: { id: 'UOWNER', profile: { huddle_state: 'in_a_huddle', huddle_state_call_id: 'Rp' } } },
+    });
+    await handlers['event:user_huddle_changed']({
+      event: { user: { id: 'U9', profile: { huddle_state: 'in_a_huddle', huddle_state_call_id: 'Rp' } } },
+    });
+    handlers.message({
+      message: {
+        subtype: 'huddle_thread',
+        channel: 'Crandom',
+        ts: '180000.000000',
+        room: {
+          id: 'Rp',
+          call_family: 'huddle',
+          created_by: 'UOWNER',
+          date_start: 172000,
+          date_end: 180000,
+          thread_root_ts: '172000.000000',
+          channels: ['Crandom'],
+          participant_history: ['UOWNER', 'U9'],
+        },
+      },
+    });
+    await flush();
+
+    assert.equal(store.getHuddle('Rp').status, 'ended');
+    const leaderboard = store.listHuddleLeaderboard();
+    const ownerRow = leaderboard.find((row) => row.user_id === 'UOWNER');
+    assert(ownerRow, 'the starter appears on the leaderboard');
+    assert(ownerRow.points >= 5, 'at least the starter bonus');
+    assert(
+      store.listTriggerLog().some((entry) => entry.action === 'huddle_join'),
+      'logs joins',
+    );
+
+    tracker.stop();
+  });
+
+  it('computes leaderboard points across duration, rank, prizes and starter', () => {
+    const awards = computeHuddlePoints({
+      huddle: { call_id: 'R', started_at: 1000, ended_at: 1300, created_by: 'U1' },
+      members: [
+        { user_id: 'U1', first_seen_at: 1000, last_seen_at: 1300, is_in: false },
+        { user_id: 'U2', first_seen_at: 1000, last_seen_at: 1250, is_in: false },
+        { user_id: 'U3', first_seen_at: 1000, last_seen_at: 1150, is_in: false },
+      ],
+      participantHistory: ['U1', 'U2', 'U3'],
+      messageStats: {
+        longest: { userId: 'U2' },
+        shortest: { userId: 'U3' },
+      },
+    });
+
+    assert.equal(awards.get('U1').points, 5 + 5 + 5, '5m + rank 1 + starter');
+    assert.equal(awards.get('U2').points, 4 + 3 + 10, '4m + rank 2 + longest message');
+    assert.equal(awards.get('U3').points, 2 + 1 + 10, '2m + rank 3 + shortest message');
+    assert(awards.get('U1').reasons.includes('started the huddle'));
   });
 });

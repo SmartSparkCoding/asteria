@@ -6,6 +6,7 @@ import {
   formatDailyUpdateMessage,
   formatUserGroupMention,
   isRepeatedQuestion,
+  parseMessageLink,
   replaceWelcomePlaceholders,
 } from '../src/utils/messages.js';
 import { getLocalDateKey, isValidTimeZone } from '../src/utils/time.js';
@@ -47,9 +48,9 @@ describe('Asteria core helpers', () => {
     assert.match(getLocalDateKey(new Date('2026-08-03T12:00:00Z'), 'UTC'), /^2026-08-03$/);
   });
 
-  it('shows a restricted App Home for non-owners', () => {
+  it('shows the Leaderboard to non-owners on the App Home', () => {
     const view = buildHomeView({
-      tab: 'daily-update',
+      tab: 'leaderboard',
       settings: {
         personal_channel_owner_id: 'UOWNER',
         timezone: 'UTC',
@@ -63,15 +64,31 @@ describe('Asteria core helpers', () => {
       notice: '',
       userGroups: [],
       isOwner: false,
+      leaderboard: [
+        { user_id: 'UFRED', points: 42 },
+        { user_id: 'UJAC', points: 17 },
+      ],
     });
 
     assert.equal(view.type, 'home');
-    assert(
-      view.blocks.some(
-        (block) =>
-          block.type === 'section' && block.text?.text.includes('configured for another personal channel owner'),
-      ),
-    );
+    assert.equal(view.callback_id, 'asteria_home_leaderboard');
+    assert(view.blocks.some((block) => block.type === 'section' && block.text?.text.includes('<@UFRED> · *42 pts*')));
     assert(!view.blocks.some((block) => block.block_id === 'navigation_tabs'));
+  });
+
+  it('parses Slack message permalinks into channel and ts', () => {
+    assert.deepEqual(parseMessageLink('https://hackclub.slack.com/archives/C09RQFJCJ4U/p1790380910506989'), {
+      channel: 'C09RQFJCJ4U',
+      ts: '1790380910.506989',
+    });
+    assert.deepEqual(
+      parseMessageLink('https://hackclub.slack.com/archives/D01234567/p1800000000000001?thread_ts=1.2'),
+      {
+        channel: 'D01234567',
+        ts: '1800000000.000001',
+      },
+    );
+    assert.equal(parseMessageLink('https://example.com/not-a-slack-link'), null);
+    assert.equal(parseMessageLink(''), null);
   });
 });
