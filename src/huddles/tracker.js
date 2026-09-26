@@ -248,14 +248,24 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       lastSeenAt: joinedAt,
       isIn: true,
     });
-    store.recordTriggerLog({ userId, action: 'huddle_join', detail: callId });
+    store.recordTriggerLog({
+      userId,
+      action: 'huddle_join',
+      detail: callId,
+      channelId: store.getHuddle(callId)?.channel_id || '',
+    });
   }
 
   async function applyLeave(userId, callId) {
     const leftAt = nowEpochSeconds();
     store.setUserHuddleState({ userId, callId: '', isIn: false });
     store.upsertHuddleMember({ callId, userId, firstSeenAt: null, lastSeenAt: leftAt, isIn: false });
-    store.recordTriggerLog({ userId, action: 'huddle_leave', detail: callId });
+    store.recordTriggerLog({
+      userId,
+      action: 'huddle_leave',
+      detail: callId,
+      channelId: store.getHuddle(callId)?.channel_id || '',
+    });
   }
 
   async function handleUserHuddleChange({ event }) {
@@ -367,6 +377,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       userId: message?.user || '',
       action: 'silly_request',
       detail: threadTs || (message.channel ?? channel),
+      channelId: message.channel ?? channel ?? '',
     });
     const postReply = async (textOrBlocks) => {
       const updatePayload = {
@@ -488,7 +499,12 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     const huddle = store.getHuddle(callId);
     const stillLive = await isHuddleStillLive(huddle, actionClient);
     if (!stillLive) {
-      store.recordTriggerLog({ userId, action: 'huddle_track_again_denied', detail: callId });
+      store.recordTriggerLog({
+        userId,
+        action: 'huddle_track_again_denied',
+        detail: callId,
+        channelId: huddle?.channel_id || channelId || '',
+      });
       if (ts && channelId) {
         try {
           await actionClient.chat.update({
@@ -515,7 +531,12 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     if (!reactivated && store.getHuddle(callId)?.status !== 'active') {
       return;
     }
-    store.recordTriggerLog({ userId, action: 'huddle_track_again', detail: callId });
+    store.recordTriggerLog({
+      userId,
+      action: 'huddle_track_again',
+      detail: callId,
+      channelId: huddle?.channel_id || channelId || '',
+    });
     if (ts && channelId) {
       try {
         await actionClient.chat.update({
@@ -555,7 +576,12 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
       return;
     }
     await generateReview({ huddle, recipientUserId: body?.user?.id, actionClient });
-    store.recordTriggerLog({ userId: body?.user?.id, action: 'huddle_review_generated', detail: callId });
+    store.recordTriggerLog({
+      userId: body?.user?.id,
+      action: 'huddle_review_generated',
+      detail: callId,
+      channelId: huddle.channel_id || body?.container?.channel_id || body?.channel?.id || '',
+    });
     const promptTs = body?.message?.ts;
     const promptChannelId = body?.container?.channel_id ?? body?.channel?.id;
     if (promptTs && promptChannelId) {
@@ -637,7 +663,12 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '' }
     if (!store.setHuddleOptedOut(callId)) {
       return;
     }
-    store.recordTriggerLog({ userId: body?.user?.id, action: 'huddle_opt_out', detail: callId });
+    store.recordTriggerLog({
+      userId: body?.user?.id,
+      action: 'huddle_opt_out',
+      detail: callId,
+      channelId: store.getHuddle(callId)?.channel_id || body?.container?.channel_id || body?.channel?.id || '',
+    });
     const ts = body?.message?.ts;
     const channelId = body?.container?.channel_id ?? body?.channel?.id;
     if (ts && channelId) {

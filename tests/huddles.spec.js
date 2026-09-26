@@ -1172,6 +1172,30 @@ describe('huddle tracker integration', () => {
     tracker.stop();
   });
 
+  it('filters the trigger log down to the given channels', async () => {
+    const store = await createTestStore();
+
+    store.upsertHuddle({ callId: 'Rin', channelId: 'Crandom', createdBy: 'U1', startedAt: 1000 });
+    store.upsertHuddle({ callId: 'Rdm', channelId: '', createdBy: 'U2', startedAt: 2000 });
+
+    store.recordTriggerLog({ userId: 'U1', action: 'huddle_join', detail: 'Rin' });
+    store.recordTriggerLog({ userId: 'U2', action: 'huddle_join', detail: 'Rdm' });
+    store.recordTriggerLog({ userId: 'U3', action: 'silly_request', detail: '172000.000000', channelId: 'Crandom' });
+
+    const inChannel = store.listTriggerLog(50, ['Crandom']);
+    assert.equal(inChannel.length, 2, 'only the rows in Crandom');
+    assert(inChannel.every((entry) => entry.channel_id === 'Crandom'));
+    assert(
+      inChannel.some((entry) => entry.action === 'huddle_join' && entry.detail === 'Rin'),
+      'a join logged before the channel was known resolves through its huddle',
+    );
+
+    assert.equal(store.listTriggerLog(50, ['Cnowhere']).length, 0, 'no rows for unrelated channels');
+    assert.equal(store.listTriggerLog(50, []).length, 0, 'no channel list means no rows');
+    assert.equal(store.listTriggerLog(50).length, 3, 'unfiltered reads still work');
+    assert.deepEqual(store.listHuddleChannelIds(), ['Crandom']);
+  });
+
   it('computes leaderboard points across duration, rank, prizes and starter', () => {
     const awards = computeHuddlePoints({
       huddle: { call_id: 'R', started_at: 1000, ended_at: 1300, created_by: 'U1' },

@@ -378,6 +378,11 @@ export async function createStore(databasePath, options = {}) {
     bindAndRun(database, "ALTER TABLE huddles ADD COLUMN last_reply_ts TEXT NOT NULL DEFAULT ''");
   }
 
+  const triggerLogColumns = bindAndFetchAll(database, 'PRAGMA table_info(trigger_log)').map((column) => column.name);
+  if (!triggerLogColumns.includes('channel_id')) {
+    bindAndRun(database, "ALTER TABLE trigger_log ADD COLUMN channel_id TEXT NOT NULL DEFAULT ''");
+  }
+
   bindAndRun(
     database,
     `
@@ -1167,30 +1172,58 @@ export async function createStore(databasePath, options = {}) {
       );
     },
 
-    recordTriggerLog({ userId, action, detail = '' }) {
+    recordTriggerLog({ userId, action, detail = '', channelId = '' }) {
       if (!userId) {
         return;
       }
       bindAndRun(
         database,
         `
-        INSERT INTO trigger_log (user_id, action, detail, created_at)
-        VALUES ($user_id, $action, $detail, CURRENT_TIMESTAMP)
+        INSERT INTO trigger_log (user_id, action, detail, channel_id, created_at)
+        VALUES ($user_id, $action, $detail, $channel_id, CURRENT_TIMESTAMP)
       `,
         {
           $user_id: userId,
           $action: action,
           $detail: detail,
+          $channel_id: channelId,
         },
       );
       persist();
     },
 
-    listTriggerLog(limit = 50) {
+    listTriggerLog(limit = 50, channelIds = null) {
+      if (Array.isArray(channelIds)) {
+        if (channelIds.length === 0) {
+          return [];
+        }
+        const placeholders = channelIds.map((_, index) => `$channel_${index}`).join(', ');
+        const params = {
+          $limit: Math.max(1, Math.min(100, limit)),
+        };
+        channelIds.forEach((channelId, index) => {
+          params[`$channel_${index}`] = channelId;
+        });
+        // Rows logged before the channel was known resolve it through the huddle they belong to.
+        return bindAndFetchAll(
+          database,
+          `
+          SELECT t.id, t.user_id, t.action, t.detail, t.created_at,
+                 COALESCE(NULLIF(t.channel_id, ''), h.channel_id, '') AS channel_id
+          FROM trigger_log t
+          LEFT JOIN huddles h ON h.call_id = t.detail
+          WHERE COALESCE(NULLIF(t.channel_id, ''), h.channel_id, '') IN (${placeholders})
+          ORDER BY t.id DESC
+          LIMIT $limit
+        `,
+          params,
+        );
+      }
+
       return bindAndFetchAll(
         database,
         `
-        SELECT id, user_id, action, detail, created_at FROM trigger_log
+        SELECT id, user_id, action, detail, channel_id, created_at FROM trigger_log
         ORDER BY id DESC
         LIMIT $limit
       `,
@@ -1198,6 +1231,17 @@ export async function createStore(databasePath, options = {}) {
           $limit: Math.max(1, Math.min(100, limit)),
         },
       );
+    },
+
+    listHuddleChannelIds() {
+      return bindAndFetchAll(
+        database,
+        `
+        SELECT DISTINCT channel_id FROM huddles
+        WHERE channel_id != ''
+        ORDER BY channel_id
+      `,
+      ).map((row) => row.channel_id);
     },
 
     getUserHuddleState(userId) {

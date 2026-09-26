@@ -66,6 +66,45 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
     logger: app.logger,
   });
 
+  let botChannelIdsCache = { ids: [], fetchedAt: 0 };
+  const BOT_CHANNEL_CACHE_MS = 5 * 60 * 1000;
+
+  /**
+   * The channels the bot itself is a member of. Huddle events are workspace-wide, so the
+   * Logs tab is filtered down to these. Falls back to channels we have seen huddles in.
+   */
+  async function listBotChannelIds(client) {
+    const now = Date.now();
+    if (botChannelIdsCache.ids.length > 0 && now - botChannelIdsCache.fetchedAt < BOT_CHANNEL_CACHE_MS) {
+      return botChannelIdsCache.ids;
+    }
+    let ids = [];
+    try {
+      let cursor = '';
+      do {
+        const page = await client.conversations.list({
+          types: 'public_channel,private_channel',
+          exclude_archived: true,
+          limit: 200,
+          ...(cursor ? { cursor } : {}),
+        });
+        for (const conversation of page?.channels || []) {
+          if (conversation.is_member) {
+            ids.push(conversation.id);
+          }
+        }
+        cursor = page?.response_metadata?.next_cursor || '';
+      } while (cursor);
+    } catch {
+      ids = [];
+    }
+    if (ids.length === 0) {
+      ids = store.listHuddleChannelIds();
+    }
+    botChannelIdsCache = { ids, fetchedAt: now };
+    return ids;
+  }
+
   async function publishTab(client, userId, tab, notice = '') {
     const settings = store.getSettings();
     const syncSettings = store.getSyncSettings();
@@ -82,7 +121,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       .slice(0, 10);
     const leaderboard = store.listHuddleLeaderboard(20);
     const isOwner = userId === settings.personal_channel_owner_id;
-    const logs = isOwner ? store.listTriggerLog(30) : [];
+    const logs = isOwner && tab === 'logs' ? store.listTriggerLog(30, await listBotChannelIds(client)) : [];
 
     await publishHome(
       client,
@@ -818,6 +857,7 @@ export function createHomeHandlers({ app, store, aiService, environment, schedul
       userId: body.user.id,
       action: 'delete_message',
       detail: `${parsed.channel}/${parsed.ts}`,
+      channelId: parsed.channel,
     });
     try {
       await client.chat.delete({ channel: parsed.channel, ts: parsed.ts });

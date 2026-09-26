@@ -995,8 +995,9 @@ function formatTriggerLogEntry(entry, timezone) {
     ? DateTime.fromSQL(entry.created_at, { zone: timezone || 'UTC' }).toFormat('d LLL HH:mm')
     : 'unknown time';
   const actor = entry.user_id ? `<@${entry.user_id}>` : '_the bot_';
+  const channel = entry.channel_id ? ` · <#${entry.channel_id}>` : '';
   const detail = entry.detail ? ` · ${entry.detail}` : '';
-  return `• ${timeLabel} · ${actor} · *${entry.action}*${detail}`;
+  return `• ${timeLabel} · ${actor} · *${entry.action}*${channel}${detail}`;
 }
 
 export function buildLogsView({ logs, notice, timezone }) {
@@ -1013,7 +1014,7 @@ export function buildLogsView({ logs, notice, timezone }) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: 'Recent triggers — who started, joined, left, opted out, or asked for huddles stuff.',
+          text: 'Recent triggers in the channels I am in — who joined, left, opted out, asked for huddles stuff, or had a message deleted.',
         },
       },
       ...(lines.length > 0
