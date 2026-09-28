@@ -1,5 +1,5 @@
 import { sendDirectMessage } from '../services/slack.js';
-import { computeHuddlePoints } from './points.js';
+import { computeHuddlePoints, parseParticipantHistory } from './points.js';
 import {
   computeHuddleStats,
   formatDuration,
@@ -13,15 +13,6 @@ const OPT_OUT_ACTION_ID = 'huddle_opt_out';
 const TRACK_AGAIN_ACTION_ID = 'huddle_track_again';
 const STALE_HUDDLE_SECONDS = 12 * 60 * 60;
 const STALE_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
-
-function parseParticipantHistory(huddle) {
-  try {
-    const parsed = JSON.parse(huddle?.participant_json ?? '[]');
-    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
-  } catch {
-    return [];
-  }
-}
 
 function parseJsonArray(value) {
   try {
@@ -584,10 +575,30 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
     };
 
     if (huddle?.status === 'active') {
-      await postReply(buildSillyReply(huddle));
+      await postReply(buildSillyReply(huddleForUser(huddle, message?.user || '')));
       return;
     }
     if (huddle?.status === 'opted_out') {
+      // Only offer the button when clicking it could actually work. Tracking
+      // being off or paused for this channel is checked in the handler and always
+      // declines, so advertising the button there was a dead end for the user.
+      if (!rules.tracking) {
+        await postReply({
+          text: '👀 hii - i stopped tracking this one.',
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: rules.paused
+                  ? '👀 hii - i stopped tracking this one, and tracking is paused in this channel right now :zipper-mouth:'
+                  : '👀 hii - i stopped tracking this one, and tracking is turned off in this channel :zipper-mouth:',
+              },
+            },
+          ],
+        });
+        return;
+      }
       await postReply({
         text: '👀 hii - do you want me to track again?',
         blocks: [
@@ -615,6 +626,23 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
       return;
     }
     if (huddle && huddle.status !== 'active') {
+      if (!rules.tracking) {
+        await postReply({
+          text: "that huddle's already over 💀 :freddie-sleeping:",
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: rules.paused
+                  ? "that huddle's already over 💀 :freddie-sleeping: - and tracking is paused in this channel right now :zipper-mouth:"
+                  : "that huddle's already over 💀 :freddie-sleeping: - and tracking is turned off in this channel, so im staying quiet :zipper-mouth:",
+              },
+            },
+          ],
+        });
+        return;
+      }
       await postReply({
         text: "that huddle's already over - nothing to track 💀 :freddie-sleeping:. @ me again when the next one starts!",
         blocks: [
@@ -641,8 +669,29 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
       });
       return;
     }
-    const trackedHuddle = store.listHuddles().find((h) => h.status === 'active');
-    await postReply(buildSillyReply(trackedHuddle || null));
+    // Fall back to a plain joke when the pinger is not in a huddle. This used to
+    // fall back to *any* active huddle in the workspace, so pinging the bot in an
+    // ordinary channel answered "you have been huddling for 4h" about a
+    // stranger's huddle somewhere else entirely.
+    await postReply(buildSillyReply(huddleForUser(null, message?.user || '')));
+  }
+
+  /**
+   * The huddle the roasts are allowed to talk about: the call the pinging user is
+   * actually in right now, or the huddle whose own thread they replied in (they
+   * are most likely in it, we may just have missed their presence event). Never a
+   * huddle from another thread or channel.
+   */
+  function huddleForUser(fallbackHuddle, userId) {
+    if (!userId) {
+      return null;
+    }
+    const state = store.getUserHuddleState?.(userId);
+    if (state?.is_in && state.call_id) {
+      const own = store.getHuddle(state.call_id);
+      return own?.status === 'active' ? own : null;
+    }
+    return fallbackHuddle?.status === 'active' ? fallbackHuddle : null;
   }
 
   async function isHuddleStillLive(huddle, actionClient) {

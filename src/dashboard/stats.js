@@ -7,7 +7,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * to see. Owners get the lot, channel managers only their channels, everyone else
  * aggregate numbers and their own switch.
  */
-export async function buildDashboardStats({ store, botChannels, permissions, cachet, startedAt, statusEvents = [] }) {
+export async function buildDashboardStats({
+  store,
+  botChannels,
+  permissions,
+  cachet,
+  flaron,
+  slack,
+  startedAt,
+  statusEvents = [],
+}) {
   const isOwner = permissions.role === ROLES.OWNER;
   const isManager = permissions.role === ROLES.MANAGER;
   const channelIds = await botChannels.list();
@@ -32,7 +41,12 @@ export async function buildDashboardStats({ store, botChannels, permissions, cac
     }
   }
 
-  const leaderboardRows = store.listHuddleLeaderboard(25, channelIds);
+  // The board counts a channel only when it is both tracked and one the bot is
+  // actually in. Passing the bot's whole membership list is what put people from
+  // untracked huddles on the board; tracked alone would count channels the bot
+  // cannot see, which could not have scored anyway.
+  const scopeChannelIds = channels.map((channel) => channel.channel_id).filter((id) => id && channelIds.includes(id));
+  const leaderboardRows = store.listHuddleLeaderboard(25, scopeChannelIds);
   const leaderboard = await withProfiles({
     rows: leaderboardRows.map((row, index) => ({
       rank: index + 1,
@@ -50,6 +64,92 @@ export async function buildDashboardStats({ store, botChannels, permissions, cac
     .slice(-6)
     .reverse()
     .map((event) => ({ state: event.state, at: event.at, detail: event.detail || '' }));
+
+  // A channel can be saved with a blank name, and huddle rows only carry a name
+  // when something recorded one, so ask Slack for the ones we are missing and
+  // remember the answer instead of rendering a raw id forever.
+  const unnamed = channels.filter((channel) => !channel.name).map((channel) => channel.channel_id);
+  if (unnamed.length && typeof botChannels.names === 'function') {
+    const resolved = await botChannels.names(unnamed);
+    for (const [channelId, name] of Object.entries(resolved)) {
+      const match = channels.find((channel) => channel.channel_id === channelId);
+      if (match) {
+        match.name = name;
+      }
+      store.setHuddleChannelName?.(channelId, name);
+    }
+  }
+
+  // Flaron knows who runs a channel and how big it is. It refuses to describe a
+  // private channel, so Slack covers the headcount there and we record which
+  // source answered.
+  const flaronRecords = flaron ? await flaron.list(channels.map((c) => c.channel_id)) : {};
+  const slackSizes = new Map();
+  if (slack?.channelSize) {
+    await Promise.all(
+      channels
+        .filter((channel) => flaronRecords[channel.channel_id]?.members == null)
+        .map(async (channel) => {
+          const size = await slack.channelSize(channel.channel_id).catch(() => null);
+          if (Number.isFinite(size)) {
+            slackSizes.set(channel.channel_id, size);
+          }
+        }),
+    );
+  }
+
+  // A channel manager gets a CM tag on the board, and a card in the channel
+  // popup with their picture and their standing. Leaderboard profiles go through
+  // withProfiles, which drops anyone who opted out of the board; a manager is
+  // named by Flaron as running a channel, which is not the same as being ranked,
+  // so they are looked up directly.
+  const managerIds = [...new Set(Object.values(flaronRecords).flatMap((record) => record.managers || []))];
+  const managerProfiles = cachet && managerIds.length ? await cachet.list(managerIds) : {};
+  const managerSet = new Set(managerIds);
+
+  const channelCards = await Promise.all(
+    channels.map(async (channel) => {
+      const record = flaronRecords[channel.channel_id] || null;
+      const fromSlack = slackSizes.has(channel.channel_id);
+      return {
+        id: channel.channel_id,
+        name: channel.name || channel.channel_id,
+        inBot: channelIds.includes(channel.channel_id),
+        enabled: !!channel.enabled,
+        autoReplies: !!channel.auto_replies,
+        restrictTriggers: !!channel.restrict_triggers,
+        paused: Number(channel.paused_until) > Math.floor(now / 1000),
+        ownerCount: parseJsonArray(channel.owner_ids).length,
+        managed: isOwner || permissions.managedChannelIds?.includes(channel.channel_id) || false,
+        flaron: {
+          known: !!record,
+          source: record?.members != null ? 'flaron' : fromSlack ? 'slack' : 'none',
+          members: record?.members ?? (fromSlack ? slackSizes.get(channel.channel_id) : null),
+          humans: record?.humans ?? null,
+          bots: record?.bots ?? null,
+        },
+        stats: summariseHuddles(
+          visibleHuddles.filter((huddle) => huddle.channel_id === channel.channel_id),
+          now,
+        ),
+        managers: (record?.managers || [])
+          .map((userId) => {
+            const profile = managerProfiles[userId] || {};
+            const onBoard = leaderboard.find((row) => row.userId === userId);
+            return {
+              userId,
+              displayName: profile.displayName || userId,
+              realName: profile.realName || '',
+              pronouns: profile.pronouns || '',
+              imageUrl: profile.imageUrl || (cachet ? cachet.avatarUrl(userId) : ''),
+              rank: onBoard?.rank ?? null,
+              points: onBoard?.points ?? null,
+            };
+          })
+          .filter((manager) => manager.userId),
+      };
+    }),
+  );
 
   return {
     generatedAt: new Date(now).toISOString(),
@@ -78,19 +178,11 @@ export async function buildDashboardStats({ store, botChannels, permissions, cac
         : 0,
       members: membersSeen.size,
     },
-    channels: channels.map((channel) => ({
-      id: channel.channel_id,
-      name: channel.name || channel.channel_id,
-      enabled: !!channel.enabled,
-      autoReplies: !!channel.auto_replies,
-      restrictTriggers: !!channel.restrict_triggers,
-      paused: Number(channel.paused_until) > Math.floor(now / 1000),
-      inBot: channelIds.includes(channel.channel_id),
-      ownerCount: parseJsonArray(channel.owner_ids).length,
-      managed: isOwner || permissions.managedChannelIds?.includes(channel.channel_id) || false,
-    })),
+    channels: channelCards,
     botChannels: { count: channelIds.length, ids: isOwner ? channelIds : [] },
-    leaderboard,
+    // Slack deep links need the workspace team id, which only auth.test knows.
+    teamId: typeof botChannels.team === 'function' ? await botChannels.team() : '',
+    leaderboard: leaderboard.map((row) => ({ ...row, channelManager: managerSet.has(row.userId) })),
     logs,
   };
 }
@@ -110,6 +202,33 @@ async function withProfiles({ rows, cachet, store }) {
       profileUrl: cachet ? cachet.profileUrl(row.userId) : '',
     };
   });
+}
+
+/** Huddle totals for one channel, for the channel popup. */
+function summariseHuddles(huddles, now) {
+  const ended = huddles.filter((huddle) => huddle.status === 'ended');
+  const durations = ended
+    .map((huddle) => (toMillis(huddle.ended_at) - toMillis(huddle.started_at)) / 1000)
+    .filter((seconds) => Number.isFinite(seconds) && seconds > 0);
+  const members = new Set();
+  for (const huddle of huddles) {
+    for (const member of parseJsonArray(huddle.participant_json)) {
+      members.add(member);
+    }
+  }
+  return {
+    total: huddles.length,
+    active: huddles.filter((huddle) => huddle.status === 'active').length,
+    ended: ended.length,
+    optedOut: huddles.filter((huddle) => huddle.status === 'opted_out').length,
+    last24h: ended.filter((huddle) => now - toMillis(huddle.ended_at) < DAY_MS).length,
+    longestSeconds: durations.length ? Math.round(Math.max(...durations)) : 0,
+    averageSeconds: durations.length
+      ? Math.round(durations.reduce((total, value) => total + value, 0) / durations.length)
+      : 0,
+    totalSeconds: Math.round(durations.reduce((total, value) => total + value, 0)),
+    members: members.size,
+  };
 }
 
 function toMillis(value) {

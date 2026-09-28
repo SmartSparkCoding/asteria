@@ -884,6 +884,120 @@ describe('huddle tracker integration', () => {
     tracker.stop();
   });
 
+  it('never roasts somebody about a huddle they are not in', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    // Somebody else's huddle, in another channel, started long ago. It is still
+    // marked active, which is what used to leak into unrelated replies.
+    store.upsertHuddle({
+      callId: 'Rother',
+      channelId: 'Celsewhere',
+      createdBy: 'USOMEONEELSE',
+      startedAt: Math.floor(Date.now() / 1000) - 4 * 3600,
+      endedAt: null,
+      threadRootTs: '999000.000000',
+      participantHistory: ['USOMEONEELSE'],
+    });
+    store.setUserHuddleState({ userId: 'USOMEONEELSE', callId: 'Rother', isIn: true });
+
+    // UOWNER pings the bot in an ordinary channel, not a thread, not in a huddle.
+    handlers.message({
+      message: {
+        type: 'message',
+        channel: 'Cquiet',
+        user: 'UOWNER',
+        text: 'hey <@BOTUSER> how are you',
+      },
+    });
+    await flush();
+
+    assert.equal(client.chat.postMessage.mock.callCount(), 1);
+    const reply = JSON.stringify(client.chat.postMessage.mock.calls[0].arguments[0]);
+    assert(!/4h|3h|\d+h\b/.test(reply), `no borrowed duration: ${reply}`);
+    assert(!/huddling for|still in your|huddle and counting/i.test(reply), `no roast: ${reply}`);
+    assert.equal(store.getUserHuddleState('UOWNER').is_in, 0, 'UOWNER is not in a huddle');
+
+    tracker.stop();
+  });
+
+  it('roasts the pinger about their own huddle', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    store.upsertHuddle({
+      callId: 'Rmine',
+      channelId: 'Cmine',
+      createdBy: 'UOWNER',
+      startedAt: Math.floor(Date.now() / 1000) - 3 * 3600,
+      endedAt: null,
+      threadRootTs: '',
+      participantHistory: ['UOWNER'],
+    });
+    store.setUserHuddleState({ userId: 'UOWNER', callId: 'Rmine', isIn: true });
+
+    // The reply mixes four roasts with a pile of 6/7 jokes, so ask a few times
+    // and require that any duration offered is the pinger's own.
+    for (let i = 0; i < 30; i += 1) {
+      handlers.message({
+        message: { type: 'message', channel: 'Cmine', user: 'UOWNER', text: '<@BOTUSER> hi' },
+      });
+    }
+    await flush();
+
+    const replies = client.chat.postMessage.mock.calls.map((call) => String(call.arguments[0].text));
+    assert.equal(replies.length, 30);
+    assert(
+      replies.some((text) => /3h/.test(text)),
+      'their own duration is fair game',
+    );
+    for (const text of replies) {
+      const duration = text.match(/(\d+h)/);
+      assert(!duration || duration[1] === '3h', `no foreign duration: ${text}`);
+    }
+
+    tracker.stop();
+  });
+
+  it('does not offer a track again button that tracking rules would decline', async () => {
+    const store = await createTestStore();
+    const client = createBasicClient();
+    const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
+
+    // Tracking turned off for this channel, and the pinger is not an owner.
+    store.upsertHuddleChannel({ channelId: 'Cquiet', enabled: false, ownerIds: ['USOMEONEELSE'] });
+    store.upsertHuddle({
+      callId: 'Ropt',
+      channelId: 'Cquiet',
+      createdBy: 'UOWNER',
+      startedAt: 172000,
+      endedAt: 172600,
+      threadRootTs: '172000.000000',
+      participantHistory: ['UOWNER'],
+    });
+    store.setHuddleStatus('Ropt', 'opted_out', 172600);
+
+    handlers.message({
+      message: {
+        type: 'message',
+        channel: 'Cquiet',
+        user: 'UOWNER',
+        thread_ts: '172000.000000',
+        text: '<@BOTUSER> track this one again?',
+      },
+    });
+    await flush();
+
+    const reply = JSON.stringify(client.chat.postMessage.mock.calls[0].arguments[0]);
+    assert(!reply.includes('huddle_track_again'), 'no dead button is advertised');
+    assert(!reply.includes('"type":"actions"'), 'no action block at all');
+    assert(/turned off|paused/.test(reply), `it says why: ${reply}`);
+
+    tracker.stop();
+  });
+
   it('replies playfully to a bot mention in a tracked huddle thread', async () => {
     const store = await createTestStore();
     const client = createBasicClient();
@@ -1059,7 +1173,7 @@ describe('huddle tracker integration', () => {
     tracker.stop();
   });
 
-  it('shames the active huddle when mentioned in a normal channel', async () => {
+  it('jokes rather than shames when mentioned in a normal channel', async () => {
     const store = await createTestStore();
     const client = createBasicClient();
     const { handlers, tracker } = createTrackerHarness({ store, client, ownerId: 'UOWNER' });
@@ -1090,6 +1204,8 @@ describe('huddle tracker integration', () => {
     assert.equal(reply.thread_ts, undefined, 'no thread_ts for channel message');
     assert(!reply.text.includes('\n\n'), 'single punchline');
     assert(/7|huddle|clanker|freddie/.test(reply.text), 'silly content present');
+    // The pinger is not a participant, so there is no duration to throw at them.
+    assert(!/huddling for|still in your|huddle and counting/i.test(reply.text), 'no roast for a bystander');
 
     tracker.stop();
   });

@@ -16,6 +16,8 @@ function isMissingScope(error) {
  */
 export function createBotChannelDirectory({ client, logger }) {
   let botUserId = '';
+  let teamId = '';
+  const nameCache = new Map();
   // Channel and DM memberships are cached separately: the logs only want real
   // channels, while point awards also need to recognise huddles held in a DM.
   const caches = {
@@ -104,11 +106,65 @@ export function createBotChannelDirectory({ client, logger }) {
     }
   }
 
+  /**
+   * Display names for channel ids, resolved from Slack and cached for the
+   * process lifetime. Configured channels can be saved with a blank name (they
+   * were seeded from ids), and the huddle rows only carry a name if something
+   * happened to record one, so without this the dashboard prints raw `C…` ids.
+   *
+   * `conversations.info` is called with form encoding on purpose: this workspace
+   * answers a JSON body with `invalid_arguments` and silently loses the `channel`
+   * argument, which looks like the channel does not exist.
+   */
+  async function names(channelIds) {
+    const wanted = [...new Set((channelIds || []).filter(Boolean))].filter((id) => !nameCache.has(id));
+    for (const id of wanted) {
+      try {
+        const response = await client.apiCall('conversations.info', {
+          method: 'POST',
+          body: new URLSearchParams({ channel: id }),
+        });
+        if (response?.ok && response.channel?.name) {
+          nameCache.set(id, response.channel.name.replace(/^#/, ''));
+        } else if (response?.error) {
+          logger?.info?.(`Could not resolve a name for ${id}: ${response.error}`);
+        }
+      } catch (error) {
+        logger?.info?.(`Could not resolve a name for ${id}: ${error?.data?.error || error?.message || error}`);
+      }
+    }
+    const resolved = {};
+    for (const id of channelIds || []) {
+      if (nameCache.has(id)) {
+        resolved[id] = nameCache.get(id);
+      }
+    }
+    return resolved;
+  }
+
+  /** Workspace team id, needed to build working slack:// profile links. */
+  async function team() {
+    if (teamId) {
+      return teamId;
+    }
+    try {
+      const auth = await client.auth.test();
+      teamId = auth?.team_id || '';
+    } catch (error) {
+      logger?.warn?.(`Could not resolve the workspace team id: ${error?.data?.error || error?.message || error}`);
+      teamId = '';
+    }
+    return teamId;
+  }
+
   return {
     list,
+    names,
+    team,
     invalidate: () => {
       caches.channels = { ids: [], fetchedAt: 0, ok: true };
       caches.withDms = { ids: [], fetchedAt: 0, ok: true };
+      nameCache.clear();
     },
   };
 }

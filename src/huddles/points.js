@@ -6,6 +6,16 @@ export const LONGEST_MESSAGE_POINTS = 10;
 export const SHORTEST_MESSAGE_POINTS = 10;
 export const STARTER_POINTS = 5;
 
+/** The join/leave trail Slack recorded for a huddle, oldest first. */
+export function parseParticipantHistory(huddle) {
+  try {
+    const parsed = JSON.parse(huddle?.participant_json ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Award points for an ended huddle. Called once when the huddle truly ends and
  * was being tracked. Returns a Map of userId -> { points, reasons } so callers

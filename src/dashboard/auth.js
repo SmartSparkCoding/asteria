@@ -74,14 +74,17 @@ export function createDashboardAuth({ client, store, logger = console, slackClie
 
   async function exchangeSlackCode(req, code, expectedNonce) {
     const redirectUri = `${publicUrl(req)}/auth/slack/callback`;
+    // Slack's token endpoint wants a form encoded body with an explicit grant type.
+    // Sending JSON without it came back as `invalid_code` on a code that was fine.
     const response = await fetch('https://slack.com/api/openid.connect.token', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
         client_id: slackClientId,
         client_secret: slackClientSecret,
         code,
         redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
       }),
     });
     const body = await response.json().catch(() => ({}));

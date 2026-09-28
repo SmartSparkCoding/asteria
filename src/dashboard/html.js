@@ -88,6 +88,11 @@ export function renderDashboardHtml({ oauthConfigured = false, signedIn = false,
   </section>
 </main>
 
+<div class="modal hidden" id="channel-modal" role="dialog" aria-modal="true" aria-labelledby="cm-title">
+  <div class="modal-scrim" id="cm-scrim"></div>
+  <div class="modal-card" id="cm-card"></div>
+</div>
+
 <footer>
   <span>Asteria, <a href="/health">health</a>, <a href="/rss.xml">rss</a></span>
   <span class="muted" id="foot-updated"><span class="skel skel-sm"></span></span>
@@ -206,6 +211,7 @@ h1 .accent{color:var(--accent-bright)}
 .avatar{width:28px;height:28px;border-radius:var(--r-sm);object-fit:cover;background:var(--raised);
   box-shadow:0 0 0 1px var(--line);display:grid;place-items:center;font-size:10.5px;font-weight:700;color:var(--ink-3)}
 .who-cell{display:flex;flex-direction:column;min-width:0}
+.who-name-row{display:flex;align-items:center;gap:6px;min-width:0}
 .who-name{font-size:14px;font-weight:520;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .who-sub{font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pts{font-family:var(--mono);font-size:14px;font-variant-numeric:tabular-nums}
@@ -266,9 +272,43 @@ h1 .accent{color:var(--accent-bright)}
 .channels li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;
   background:var(--raised);border-radius:var(--r-sm);font-size:13.5px}
 .channels .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The row opens a popup rather than leaving the site, so it is a button but
+   still reads as the blue link the channel name has always been. */
+.chan-open{background:none;border:0;padding:0;font:inherit;color:var(--accent-bright);cursor:pointer;
+  text-align:left;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.chan-open:hover{text-decoration:underline}
+.chan-open:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px;border-radius:3px}
 .dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--ink-3);box-shadow:0 0 0 2px rgba(139,148,158,.16)}
 .dot.on{background:var(--accent-bright);box-shadow:0 0 0 2px rgba(46,160,67,.2)}
 .dot.paused{background:var(--gold)}
+
+/* channel popup */
+.modal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal.hidden{display:none}
+.modal-scrim{position:absolute;inset:0;background:rgba(1,4,9,.72);backdrop-filter:blur(2px)}
+.modal-card{position:relative;width:min(560px,100%);max-height:86vh;overflow-y:auto;background:var(--surface);
+  border-radius:var(--r-lg);box-shadow:0 0 0 1px var(--line),0 24px 60px rgba(1,4,9,.6);padding:20px}
+.cm-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}
+.cm-title{font-size:19px;font-weight:640;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;min-width:0}
+.cm-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-close{background:none;border:0;color:var(--ink-3);cursor:pointer;font-size:20px;line-height:1;padding:2px 6px;border-radius:6px}
+.cm-close:hover{color:var(--ink);background:var(--raised)}
+.cm-sub{color:var(--ink-3);font-size:12.5px;margin-top:5px}
+.cm-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:1px;background:var(--line-soft);
+  border-radius:var(--r-sm);overflow:hidden;margin-bottom:16px}
+.cm-stat{background:var(--raised);padding:10px 12px}
+.cm-stat b{display:block;font-size:16px;font-weight:620;letter-spacing:-.01em}
+.cm-stat span{display:block;font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em;margin-top:3px}
+.cm-label{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px}
+.cm-managers{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.cm-managers li{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--raised);border-radius:var(--r-sm)}
+.cm-managers .avatar{width:30px;height:30px;border-radius:8px;object-fit:cover;flex:none;background:var(--line-soft)}
+.cm-who{min-width:0;flex:1}
+.cm-who b{display:block;font-size:13.5px;font-weight:560;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-who span{display:block;font-size:11.5px;color:var(--ink-3)}
+.cm-note{font-size:12.5px;color:var(--ink-3);margin-top:10px}
+.tag-cm{font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:2px 5px;border-radius:4px;
+  background:rgba(88,166,255,.16);color:var(--accent-bright);box-shadow:0 0 0 1px rgba(88,166,255,.28);flex:none}
 
 /* activity log */
 .log{list-style:none;margin:0;padding:0;display:grid;gap:1px;background:var(--line-soft);
@@ -290,7 +330,18 @@ const $ = (id) => document.getElementById(id);
 const base = document.documentElement.dataset.base || '';
 const fmt = new Intl.NumberFormat();
 const STAR_MARK = '${STAR_SVG}';
-let viewer = null, first = true;
+let viewer = null, first = true, teamId = '';
+
+/** Huddle lengths, as "1h 04m" or "12m 30s". */
+function fmtDuration(seconds){
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return h + 'h ' + String(m).padStart(2, '0') + 'm';
+  if (m) return m + 'm ' + String(s).padStart(2, '0') + 's';
+  return s + 's';
+}
 
 const NONE_MARK = '<span class="none-mark">' + STAR_MARK + '</span>';
 function none(title, hint){
@@ -333,30 +384,132 @@ function setField(id, value, placeholder){
   if (!node.textContent) node.innerHTML = '<span class="placeholder">' + placeholder + '</span>';
 }
 
+/**
+ * Board rows are patched in place rather than re-rendered. Replacing the list's
+ * HTML on every 5s poll threw away each <img> and made every avatar flash and
+ * re-download, and a rank change used to look like a full page refresh. Rows are
+ * keyed by user id and re-ordered with appendChild, which moves the existing
+ * nodes (and their loaded images) instead of recreating them.
+ */
+let boardRows = new Map();
+let channelData = [];
+
+function slackProfileUrl(userId){
+  if (!userId || !teamId) return '';
+  return 'slack://user?team=' + encodeURIComponent(teamId) + '&id=' + encodeURIComponent(userId);
+}
+
+function avatarNode(row, name){
+  if (row.imageUrl){
+    const img = document.createElement('img');
+    img.className = 'avatar';
+    img.alt = '';
+    img.loading = 'lazy';
+    img.src = row.imageUrl;
+    img.addEventListener('error', function(){
+      const fallback = document.createElement('span');
+      fallback.className = 'avatar';
+      fallback.textContent = initials(name);
+      this.replaceWith(fallback);
+    });
+    return img;
+  }
+  const fallback = document.createElement('span');
+  fallback.className = 'avatar';
+  fallback.textContent = initials(name);
+  return fallback;
+}
+
+function boardRow(row, viewer, existing){
+  const name = row.displayName || row.userId;
+  const sub = [row.pronouns, row.realName && row.realName !== name ? row.realName : ''].filter(Boolean).join(' / ');
+  const node = existing ? existing.li : document.createElement('li');
+  if (!existing){
+    node.innerHTML = '<span class="rank"></span><span class="who-cell">' +
+      '<span class="who-name-row"><span class="who-name"></span></span><span class="who-sub"></span></span>' +
+      '<span class="pts"></span>';
+    node.insertBefore(avatarNode(row, name), node.querySelector('.who-cell'));
+  } else if (existing.imageUrl !== row.imageUrl){
+    // A profile that resolves after the first paint still gets its picture, and
+    // one that disappears falls back without touching the rest of the row.
+    const current = node.querySelector('.avatar');
+    if (current && (current.tagName !== 'IMG' || current.getAttribute('src') !== row.imageUrl)){
+      current.replaceWith(avatarNode(row, name));
+    }
+  }
+  node.classList.toggle('me', Boolean(viewer && viewer.userId === row.userId));
+  node.querySelector('.rank').textContent = String(row.rank);
+
+  // Everything is addressed by class, never by position: the CM tag is inserted
+  // and removed as manager status changes, which must not renumber anything.
+  const whoCell = node.querySelector('.who-cell');
+  const nameRow = whoCell.querySelector('.who-name-row');
+  const cmTag = nameRow.querySelector('.tag-cm');
+  if (row.channelManager && !cmTag){
+    const tag = document.createElement('span');
+    tag.className = 'tag-cm';
+    tag.textContent = 'CM';
+    tag.title = 'Channel manager';
+    nameRow.appendChild(tag);
+  } else if (!row.channelManager && cmTag){
+    cmTag.remove();
+  }
+
+  const href = slackProfileUrl(row.userId);
+  let whoName = nameRow.querySelector('.who-name');
+  if (href && whoName.tagName !== 'A'){
+    const link = document.createElement('a');
+    link.className = 'who-name';
+    link.textContent = whoName.textContent;
+    whoName.parentNode.replaceChild(link, whoName);
+    whoName = link;
+  }
+  if (whoName.textContent !== name) {
+    whoName.textContent = name;
+  }
+  if (href && whoName.getAttribute('href') !== href) {
+    whoName.setAttribute('href', href);
+  }
+  const whoSub = whoCell.querySelector('.who-sub');
+  whoSub.textContent = sub;
+  whoSub.classList.toggle('hidden', !sub);
+  const pts = node.querySelector('.pts');
+  pts.textContent = fmt.format(row.points);
+  pts.classList.toggle('zero', !row.points);
+  return node;
+}
+
 function renderBoard(rows, viewer){
   const board = $('board');
   if (!rows.length){
-    const everyoneHidden = viewer && viewer.signedIn && viewer.isOwner;
-    board.innerHTML = '<li class="none-slot">' + none(
-      'No points on the board',
-      everyoneHidden
-        ? 'Nobody has opted in to the leaderboard yet.'
-        : 'Points appear once the bot is in a channel and someone joins a huddle.'
-    ) + '</li>';
+    if (boardRows.size){
+      boardRows = new Map();
+      const everyoneHidden = viewer && viewer.signedIn && viewer.isOwner;
+      board.innerHTML = '<li class="none-slot">' + none(
+        'No points on the board',
+        everyoneHidden
+          ? 'Nobody has opted in to the leaderboard yet.'
+          : 'Points appear once the bot is in a tracked channel and someone joins a huddle.'
+      ) + '</li>';
+    }
     return;
   }
-  board.innerHTML = rows.map((row) => {
-    const name = row.displayName || row.userId;
-    const sub = [row.pronouns, row.realName && row.realName !== name ? row.realName : ''].filter(Boolean).join(' / ');
-    const avatar = row.imageUrl
-      ? '<img class="avatar" alt="" loading="lazy" src="' + row.imageUrl + '" onerror="this.replaceWith(Object.assign(document.createElement(\\'span\\'),{className:\\'avatar\\',textContent:\\'\\' + initials(name) + \\'}))">'
-      : '<span class="avatar">' + escapeHtml(initials(name)) + '</span>';
-    return '<li' + (viewer && viewer.userId === row.userId ? ' class="me"' : '') + '>' +
-      '<span class="rank">' + row.rank + '</span>' + avatar +
-      '<span class="who-cell"><span class="who-name">' + escapeHtml(name) + '</span>' +
-      (sub ? '<span class="who-sub">' + escapeHtml(sub) + '</span>' : '') + '</span>' +
-      '<span class="pts' + (row.points ? '' : ' zero') + '">' + fmt.format(row.points) + '</span></li>';
-  }).join('');
+  if (board.querySelector('.none-slot')){
+    board.innerHTML = '';
+    boardRows = new Map();
+  }
+  const next = new Map();
+  rows.forEach((row) => {
+    const existing = boardRows.get(row.userId);
+    const li = boardRow(row, viewer, existing);
+    next.set(row.userId, { li: li, userId: row.userId, imageUrl: row.imageUrl });
+
+    board.appendChild(li);
+  });
+  for (const [userId, entry] of boardRows){
+    if (!next.has(userId)) entry.li.remove();
+  }
+  boardRows = next;
 }
 
 function renderOptIn(){
@@ -389,16 +542,78 @@ async function toggleOptIn(){
 function renderChannels(channels, botCount){
   const list = $('channels');
   $('ch-tag').textContent = botCount + ' in bot';
-  if (!channels.length){
+  // Kept so the popup can read the same numbers without another round trip.
+  channelData = channels || [];
+  if (!channelData.length){
     list.innerHTML = '<li class="none-slot">' + none('No channels yet', 'Add Asteria to a channel and it shows up here.') + '</li>';
     return;
   }
-  list.innerHTML = channels.map((channel) => {
+  list.innerHTML = channelData.map((channel) => {
     const cls = channel.paused ? 'paused' : (channel.enabled ? 'on' : '');
     const state = channel.paused ? 'paused' : (channel.enabled ? 'tracking' : 'off');
-    return '<li><span class="name">' + (channel.inBot ? '' : 'not in bot: ') + escapeHtml(channel.name) + '</span>' +
+    return '<li><span class="name"><button class="chan-open" data-channel="' + escapeHtml(channel.id) + '">' +
+      escapeHtml(channel.name) + '</button>' + (channel.inBot ? '' : ' <span class="muted">not in bot</span>') + '</span>' +
       '<span class="tag' + (channel.enabled ? ' ok' : '') + '"><i class="dot ' + cls + '"></i>' + state + '</span></li>';
   }).join('');
+}
+
+/** The channel popup: huddle totals, then who runs it. */
+function openChannelModal(id){
+  const channel = channelData.find((entry) => entry.id === id);
+  const modal = $('channel-modal');
+  if (!channel || !modal) return;
+  const stats = channel.stats || {};
+  const members = channel.flaron || {};
+  const source = members.source === 'flaron'
+    ? 'Flaron'
+    : members.source === 'slack' ? 'Slack' : 'Unknown';
+  const card = $('cm-card');
+  const managers = channel.managers || [];
+  const managerHtml = managers.length
+    ? managers.map((manager) => {
+        const label = manager.realName && manager.realName !== manager.displayName
+          ? manager.displayName + ' (' + manager.realName + ')'
+          : manager.displayName;
+        const standing = manager.rank
+          ? 'Rank ' + manager.rank + ' / ' + fmt.format(manager.points || 0) + ' pts'
+          : 'Not on the leaderboard';
+        const img = manager.imageUrl
+          ? '<img class="avatar" src="' + escapeHtml(manager.imageUrl) + '" alt="">'
+          : '<span class="avatar">' + escapeHtml(initials(manager.displayName)) + '</span>';
+        return '<li>' + img + '<span class="cm-who"><b>' + escapeHtml(label) + '</b>' +
+          '<span>' + escapeHtml([manager.pronouns, standing].filter(Boolean).join(' / ')) + '</span></span>' +
+          '<span class="tag-cm">CM</span></li>';
+      }).join('')
+    : '<li class="none">' + none('No manager found', 'Flaron does not describe private channels yet.') + '</li>';
+  card.innerHTML = '<div class="cm-head"><div><div class="cm-title" id="cm-title"><span>' +
+      escapeHtml(channel.name) + '</span><span class="tag' + (channel.enabled ? ' ok' : '') + '">' +
+      (channel.paused ? 'paused' : channel.enabled ? 'tracking' : 'off') + '</span></div>' +
+      '<div class="cm-sub">' + escapeHtml([
+        members.members != null ? fmt.format(members.members) + ' members' : 'Size unknown',
+        members.humans != null ? members.humans + ' human' + (members.humans === 1 ? '' : 's') : '',
+        members.bots != null ? members.bots + ' bot' + (members.bots === 1 ? '' : 's') : '',
+        'size from ' + source,
+      ].filter(Boolean).join(' / ')) + '</div></div>' +
+      '<button class="cm-close" id="cm-close" aria-label="Close">&times;</button></div>' +
+    '<div class="cm-stats">' + [
+      ['Huddles', stats.total || 0],
+      ['Active', stats.active || 0],
+      ['Ended', stats.ended || 0],
+      ['Last 24h', stats.last24h || 0],
+      ['Members seen', stats.members || 0],
+      ['Avg length', stats.averageSeconds ? fmtDuration(stats.averageSeconds) : 'none'],
+    ].map((pair) => '<div class="cm-stat"><b>' + escapeHtml(String(pair[1])) + '</b><span>' + pair[0] + '</span></div>').join('') + '</div>' +
+    '<div class="cm-label">Managed by</div><ul class="cm-managers">' + managerHtml + '</ul>' +
+    '<p class="cm-note">Huddles here: ' + fmtDuration(stats.totalSeconds || 0) + ' of huddle time, longest ' +
+    (stats.longestSeconds ? fmtDuration(stats.longestSeconds) : 'none yet') + '.</p>' +
+    '<p class="cm-note"><a href="https://slack.com/app_redirect?channel=' + encodeURIComponent(channel.id) +
+      '" target="_blank" rel="noopener">Open #' + escapeHtml(channel.name) + ' in Slack</a></p>';
+  modal.classList.remove('hidden');
+  $('cm-close').focus();
+}
+
+function closeChannelModal(){
+  $('channel-modal').classList.add('hidden');
 }
 
 function renderLog(entries, allowed){
@@ -444,10 +659,10 @@ async function refresh(){
     return;
   }
   viewer = data.viewer;
+  if (data.teamId) teamId = data.teamId;
   const h = data.huddles, u = data.uptime;
 
   const boardTotal = data.leaderboard.reduce((total, row) => total + row.points, 0);
-  const bare = !h.total && !h.members && !data.botChannels.count;
 
   setValue('stat-active', fmt.format(h.active));
   setValue('stat-24h', fmt.format(h.last24h));
@@ -465,17 +680,43 @@ async function refresh(){
   stateTag.classList.toggle('ok', u.state === 'ok' || u.state === 'operational');
   $('foot-updated').textContent = 'updated ' + new Date(data.generatedAt).toISOString().slice(11, 19) + 'Z';
 
+  // Only the numbers above are on a timer. Re-drawing the lists every 5s is what
+  // made avatars flash and re-download, and nothing in them moves that fast, so
+  // the first paint owns them.
+  if (first) renderAll(data);
+
+  if (first) {
+    const bare = !h.total && !h.members && !data.botChannels.count;
+    if (bare) {
+      cold('Nothing here yet', 'Asteria has not seen a huddle, a person, or a channel. Invite it to a channel and this page fills itself in.');
+    }
+    first = false;
+  }
+}
+
+function renderAll(data){
   renderBoard(data.leaderboard, viewer);
   renderOptIn();
   renderChannels(data.channels, data.botChannels.count);
   renderLog(data.logs, Boolean(viewer && viewer.isOwner));
   renderSparkline(data.leaderboard.slice(0, 12).map((row) => row.points));
-
-  if (bare) {
-    cold('Nothing here yet', 'Asteria has not seen a huddle, a person, or a channel. Invite it to a channel and this page fills itself in.');
-  }
-  first = false;
 }
+
+// The channel list is re-rendered, so the open handler is delegated rather than
+// bound per row. The popup closes on the scrim, the close button, or Escape.
+document.addEventListener('click', function (event) {
+  const opener = event.target.closest('.chan-open');
+  if (opener){
+    openChannelModal(opener.getAttribute('data-channel'));
+    return;
+  }
+  if (event.target.closest('#cm-close') || event.target.id === 'cm-scrim'){
+    closeChannelModal();
+  }
+});
+document.addEventListener('keydown', function (event) {
+  if (event.key === 'Escape') closeChannelModal();
+});
 
 refresh();
 setInterval(refresh, 5000);

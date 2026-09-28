@@ -3,6 +3,7 @@ import { createHomeHandlers } from './app-home/handlers.js';
 import { createChannelPermissions } from './app-home/permissions.js';
 import { loadEnvironment } from './config/env.js';
 import { createDashboardServer } from './dashboard/server.js';
+import { backfillChannelPoints } from './database/backfill-channel-points.js';
 import { createStore } from './database/store.js';
 import { registerDmDeleteByLink } from './dm/delete-by-link.js';
 import { createHuddleTracker } from './huddles/tracker.js';
@@ -60,6 +61,16 @@ export async function createAsteriaRuntime() {
 
   const botChannels = createBotChannelDirectory({ client: app.client, logger });
   const permissions = createChannelPermissions({ store });
+
+  // Attribute the per-huddle points that predate huddle_channel_points before
+  // anything can read a channel-scoped leaderboard. Cheap and self-healing: it
+  // is a no-op once the attributed copy has rows. A failure here must not stop
+  // the bot from starting, it just leaves the board short until the next boot.
+  try {
+    backfillChannelPoints(store, { logger });
+  } catch (error) {
+    logger.error(`Could not attribute historical huddle points: ${error?.message || error}`);
+  }
 
   createHomeHandlers({
     app,

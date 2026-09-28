@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { buildStatusRss, readStatusEvents } from '../status/status-core.js';
 import { createDashboardAuth } from './auth.js';
 import { createCachetDirectory } from './cachet.js';
+import { createFlaronDirectory } from './flaron.js';
 import { renderDashboardHtml } from './html.js';
 import { resolvePermissions } from './permissions.js';
 import { buildDashboardStats } from './stats.js';
@@ -15,6 +16,20 @@ const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 export function createDashboardServer({ store, client, botChannels, logger = console, startedAt = Date.now() }) {
   const eventsFilePath = process.env.ASTERIA_STATUS_FILE || path.join(repoRoot, 'data', 'status-events.json');
   const cachet = createCachetDirectory({ logger });
+  const flaron = createFlaronDirectory({ logger });
+  // Flaron will not describe a private channel, so Slack supplies the headcount
+  // for those. conversations.info answers with form encoding here, same as the
+  // rest of this workspace's API calls.
+  const slack = {
+    channelSize: async (channelId) => {
+      const response = await client.apiCall('conversations.info', {
+        method: 'POST',
+        body: new URLSearchParams({ channel: channelId, include_num_members: 'true' }),
+      });
+      const total = Number(response?.channel?.num_members);
+      return Number.isFinite(total) ? total : null;
+    },
+  };
   const auth = createDashboardAuth({
     client,
     store,
@@ -236,6 +251,8 @@ export function createDashboardServer({ store, client, botChannels, logger = con
         botChannels,
         permissions: auth_?.permissions || { role: null, isOwner: false, isManager: false, managedChannelIds: [] },
         cachet,
+        flaron,
+        slack,
         startedAt,
         statusEvents: readStatusEvents(eventsFilePath),
       });

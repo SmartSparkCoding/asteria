@@ -3,11 +3,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it, mock } from 'node:test';
+import { createDashboardAuth } from '../src/dashboard/auth.js';
 import { cachetAvatarUrl, cachetUserUrl, createCachetDirectory } from '../src/dashboard/cachet.js';
 import { renderDashboardHtml } from '../src/dashboard/html.js';
 import { ROLES, resolvePermissions } from '../src/dashboard/permissions.js';
 import { createDashboardServer } from '../src/dashboard/server.js';
 import { buildDashboardStats } from '../src/dashboard/stats.js';
+import { backfillChannelPoints } from '../src/database/backfill-channel-points.js';
 import { createStore } from '../src/database/store.js';
 
 let createdPaths = [];
@@ -227,6 +229,9 @@ describe('dashboard server', () => {
 
   it('lets a normal user hide themselves from the leaderboard, and only themselves', async () => {
     const store = await createTestStore();
+    // The board is scoped to the tracked channels, so the points have to live in
+    // one that is actually being tracked.
+    store.setHuddleChannelName('Cbot', 'bot-channel');
     store.awardHuddlePoints('U0AEYDUCLKF', 50, 'Cbot');
     store.awardHuddlePoints('U0PLAIN01', 30, 'Cbot');
     const harness = await startDashboard({ store });
@@ -405,14 +410,23 @@ describe('dashboard stats', () => {
 
     assert.equal(stats.huddles.ended, 1);
     assert.equal(stats.huddles.members, 2);
-    // Every huddle before per-channel attribution shipped is a lifetime point
-    // with no channel attached. Scoping must not make those disappear, which
-    // is the whole production leaderboard.
-    store.awardHuddlePoints('U3', 120);
+    // A scoped board is built from the attributed copy only, so it can only show
+    // points we can prove landed in the scope.
+    store.awardHuddlePoints('U3', 120, 'Celsewhere');
+    store.awardHuddlePoints('U4', 90);
     const scoped = store.listHuddleLeaderboard(25, ['Cbot']);
     assert(
-      scoped.some((row) => row.user_id === 'U3' && row.points === 120),
-      'unattributed history survives a scope',
+      !scoped.some((row) => row.user_id === 'U3'),
+      'points from a channel outside the scope stay off the scoped board',
+    );
+    assert(!scoped.some((row) => row.user_id === 'U4'), 'points with no channel at all stay off the scoped board');
+    assert.deepEqual(
+      scoped.map((row) => [row.user_id, row.points]),
+      [
+        ['U1', 40],
+        ['U2', 10],
+      ],
+      'the scoped board is exactly the in-scope channels',
     );
     assert.equal(stats.uptime.seconds >= 59, true);
     assert.equal(stats.uptime.state, 'ok');
@@ -421,6 +435,175 @@ describe('dashboard stats', () => {
     assert.equal(stats.leaderboard[0].displayName, 'Sam');
     assert.equal(stats.leaderboard[0].imageUrl, 'https://img/sam.png');
     assert.equal(stats.botChannels.count, 1);
+    store.close();
+  });
+
+  it('resolves and remembers a channel name Slack knows and the database does not', async () => {
+    const store = await createTestStore();
+    // A channel configured from its id has no name anywhere, which is the
+    // production case that made the dashboard print a raw C... id.
+    store.upsertHuddleChannel({ channelId: 'Cunknown' });
+    store.upsertHuddleChannel({ channelId: 'Cnamed', name: 'already-known' });
+    const seen = [];
+    const botChannels = {
+      list: async () => ['Cunknown', 'Cnamed'],
+      names: async (ids) => {
+        seen.push([...ids]);
+        return { Cunknown: 'j-log' };
+      },
+      team: async () => 'T0266FRGM',
+    };
+    const stats = await buildDashboardStats({
+      store,
+      botChannels,
+      permissions: { role: ROLES.OWNER, isOwner: true, isManager: false, managedChannelIds: null },
+      cachet: null,
+      startedAt: Date.now(),
+      statusEvents: [],
+    });
+
+    assert.deepEqual(seen, [['Cunknown']], 'only the nameless channel is looked up');
+    const channels = Object.fromEntries(stats.channels.map((c) => [c.id, c.name]));
+    assert.equal(channels.Cunknown, 'j-log', 'the raw id is replaced by a real name');
+    assert.equal(channels.Cnamed, 'already-known', 'a known name is left alone');
+    assert.equal(stats.teamId, 'T0266FRGM', 'the team id is exposed for profile links');
+
+    // Second load must not need Slack again.
+    seen.length = 0;
+    const again = await buildDashboardStats({
+      store,
+      botChannels: {
+        ...botChannels,
+        names: async (ids) => {
+          seen.push(ids);
+          return {};
+        },
+      },
+      permissions: { role: ROLES.OWNER, isOwner: true, isManager: false, managedChannelIds: null },
+      cachet: null,
+      startedAt: Date.now(),
+      statusEvents: [],
+    });
+    assert.deepEqual(seen, [], 'the resolved name was persisted, so no lookup is needed');
+    assert.equal(Object.fromEntries(again.channels.map((c) => [c.id, c.name])).Cunknown, 'j-log');
+    store.close();
+  });
+
+  it('counts a channel only when it is tracked and the bot is in it', async () => {
+    const store = await createTestStore();
+    store.upsertHuddleChannel({ channelId: 'Cinbot' });
+    store.upsertHuddleChannel({ channelId: 'Cnotbot' });
+    store.awardHuddlePoints('U1', 500, 'Cinbot');
+    store.awardHuddlePoints('U2', 400, 'Cnotbot');
+    store.awardHuddlePoints('U3', 300, 'Cuntracked');
+    const stats = await buildDashboardStats({
+      store,
+      botChannels: { list: async () => ['Cinbot', 'Cuntracked'] },
+      permissions: { role: ROLES.OWNER, isOwner: true, isManager: false, managedChannelIds: null },
+      cachet: null,
+      startedAt: Date.now(),
+      statusEvents: [],
+    });
+    assert.equal(stats.botChannels.count, 2, 'the bot is in two channels');
+    assert.deepEqual(
+      stats.leaderboard.map((row) => [row.userId, row.points]),
+      [['U1', 500]],
+      'only the tracked channel the bot is also in scores',
+    );
+    store.close();
+  });
+
+  it('re-attributes pre-attribution huddles so a scoped board is not empty', async () => {
+    const store = await createTestStore();
+    // A huddle that ended before huddle_channel_points existed: it has a lifetime
+    // score and no attributed copy, which is what used to leave the scoped board
+    // showing nothing (or, worse, everything).
+    const startedAt = Math.floor(Date.now() / 1000) - 7200;
+    store.upsertHuddle({
+      callId: 'R1',
+      channelId: 'Cbot',
+      createdBy: 'U1',
+      startedAt,
+      endedAt: startedAt + 600,
+      participantHistory: ['U1', 'U2'],
+    });
+    store.setHuddleStatus('R1', 'ended', startedAt + 600);
+    store.upsertHuddleMember({
+      callId: 'R1',
+      userId: 'U1',
+      firstSeenAt: startedAt,
+      lastSeenAt: startedAt + 600,
+      isIn: false,
+    });
+    store.upsertHuddleMember({
+      callId: 'R1',
+      userId: 'U2',
+      firstSeenAt: startedAt,
+      lastSeenAt: startedAt + 300,
+      isIn: false,
+    });
+    // Awarded before attribution existed: a lifetime score with no channel, which
+    // is exactly the shape of history the rebuild has to recover.
+    store.awardHuddlePoints('U1', 10);
+
+    assert.deepEqual(store.huddlePointTotals(), { lifetime: 10, attributed: 0, rows: 0 });
+    assert.equal(store.listHuddleLeaderboard(25, ['Cbot']).length, 0, 'nothing attributed yet');
+
+    const result = backfillChannelPoints(store, { logger: { info: () => {} } });
+    assert.equal(result.huddles, 1, 'the one ended huddle is rescored');
+    assert.equal(result.rows, 2, 'one row per participant in the channel');
+    assert.equal(store.huddlePointTotals().attributed > 10, true, 'rank and starter points come back too');
+    assert.equal(backfillChannelPoints(store, { logger: { info: () => {} } }), null, 'a second run is a no-op');
+
+    const scoped = store.listHuddleLeaderboard(25, ['Cbot']);
+    assert.deepEqual(
+      scoped.map((row) => row.user_id),
+      ['U1', 'U2'],
+      'both participants are back on the board',
+    );
+    assert.equal(scoped[0].points > scoped[1].points, true, 'U1 stayed in for twice as long');
+    assert(store.listHuddleLeaderboard(25, ['Cother']).length === 0, 'a different scope still sees nothing');
+    store.close();
+  });
+
+  it('rebuilds the attributed copy from the huddles it was given', async () => {
+    const store = await createTestStore();
+    const startedAt = Math.floor(Date.now() / 1000) - 3600;
+    store.upsertHuddle({
+      callId: 'R1',
+      channelId: 'Cone',
+      createdBy: 'U1',
+      startedAt,
+      endedAt: startedAt + 120,
+      participantHistory: ['U1'],
+    });
+    store.setHuddleStatus('R1', 'ended', startedAt + 120);
+    store.upsertHuddleMember({
+      callId: 'R1',
+      userId: 'U1',
+      firstSeenAt: startedAt,
+      lastSeenAt: startedAt + 120,
+      isIn: false,
+    });
+    // A still-running huddle has no score yet and must not be counted.
+    store.upsertHuddle({
+      callId: 'R2',
+      channelId: 'Cone',
+      createdBy: 'U1',
+      startedAt: startedAt + 200,
+      participantHistory: ['U1'],
+    });
+
+    const awarded = new Map([['U1', { points: 7 }]]);
+    const result = store.rebuildHuddleChannelPoints(() => awarded);
+    assert.equal(result.huddles, 1, 'only ended huddles are scored');
+    assert.equal(result.rows, 1);
+    assert.deepEqual(store.listHuddleLeaderboard(25, ['Cone']), [{ user_id: 'U1', points: 7 }]);
+
+    // A rebuild replaces rather than accumulates, so running it twice is safe.
+    store.rebuildHuddleChannelPoints(() => awarded);
+    assert.deepEqual(store.listHuddleLeaderboard(25, ['Cone']), [{ user_id: 'U1', points: 7 }]);
+    assert.throws(() => store.rebuildHuddleChannelPoints(), TypeError);
     store.close();
   });
 });
@@ -445,5 +628,202 @@ describe('dashboard markup', () => {
     const html = renderDashboardHtml({ signedIn: false, oauthConfigured: true });
     assert.match(html, /class="skel/, 'loading placeholders are skeletons, not dashes');
     assert.match(html, /id="board"><li class="none-slot">/);
+  });
+
+  it('renders the channel popup shell and its styles', () => {
+    const html = renderDashboardHtml({ signedIn: false, oauthConfigured: true });
+    assert.match(html, /id="channel-modal"/, 'the popup exists in the markup');
+    assert.match(html, /class="modal-scrim" id="cm-scrim"/, 'a scrim closes it');
+    assert.match(html, /role="dialog" aria-modal="true"/, 'it is announced as a dialog');
+    assert.match(html, /\.modal-card\{/, 'the card is styled');
+  });
+
+  it('opens the popup from a channel name and closes on scrim, button and escape', () => {
+    const html = renderDashboardHtml({ signedIn: false, oauthConfigured: true });
+    assert.match(html, /function openChannelModal\(/, 'there is an opener to call');
+    assert.match(html, /class="chan-open" data-channel=/, 'channel rows are the trigger');
+    assert.match(html, /event\.target\.closest\('\.chan-open'\)/, 'the click is delegated');
+    assert.match(html, /openChannelModal\(opener\.getAttribute\('data-channel'\)\)/, 'it opens by id');
+    assert.match(html, /closest\('#cm-close'\) \|\| event\.target\.id === 'cm-scrim'/, 'clicks outside close it');
+    assert.match(html, /event\.key === 'Escape'/, 'escape closes it');
+    assert.match(html, /app_redirect\?channel=/, 'the popup can still open the real channel');
+  });
+
+  it('adds and removes the CM tag in place instead of rebuilding the row', () => {
+    const html = renderDashboardHtml({ signedIn: false, oauthConfigured: true });
+    assert.match(html, /nameRow\.appendChild\(tag\)/, 'the tag goes in the name row');
+    assert.match(html, /!row\.channelManager && cmTag\)\{\s*cmTag\.remove\(\)/, 'it comes back out');
+    assert.doesNotMatch(html, /whoCell\.children\[/, 'no positional lookups inside the name cell');
+  });
+
+  it('polls only the status box and lets the first paint own the lists', () => {
+    const html = renderDashboardHtml({ signedIn: false, oauthConfigured: true });
+    assert.match(html, /if \(first\) renderAll\(data\);/, 'lists render once');
+    assert.match(html, /function renderAll\(data\)\{/, 'the list draw is its own function');
+    const statusOnly = html.slice(html.indexOf('async function refresh()'), html.indexOf('function renderAll(data)'));
+    assert.doesNotMatch(statusOnly, /renderBoard\(|renderChannels\(/, 'the 5s path never re-draws the lists');
+    assert.match(statusOnly, /setValue\('stat-active'/, 'it still updates the numbers');
+  });
+
+  it('formats huddle lengths for the popup', () => {
+    const html = renderDashboardHtml({ signedIn: false, oauthConfigured: true });
+    assert.match(html, /function fmtDuration\(seconds\)/);
+    assert.match(html, /avg/i);
+  });
+
+  it('describes each channel for the popup with Flaron, Slack or nothing', async () => {
+    const store = await createTestStore();
+    store.upsertHuddleChannel({ channelId: 'Cpublic', name: 'j-log' });
+    store.upsertHuddleChannel({ channelId: 'Cprivate', name: 'tinkering' });
+    const slackSizes = { Cprivate: 45 };
+    const flaron = {
+      list: async () => ({
+        Cpublic: { members: 27, humans: 7, bots: 20, managers: ['U0AEYDUCLKF'] },
+      }),
+    };
+    const slack = { channelSize: async (id) => slackSizes[id] ?? null };
+    const cachet = {
+      avatarUrl: (id) => 'https://cachet/' + id + '/r',
+      profileUrl: (id) => 'https://cachet/user/' + id,
+      list: async (ids) =>
+        Object.fromEntries(
+          ids.map((id) => [
+            id,
+            { userId: id, displayName: 'Jacob', realName: 'Jacob N', imageUrl: 'https://img/j.png' },
+          ]),
+        ),
+      logger: { warn: mock.fn() },
+    };
+    const stats = await buildDashboardStats({
+      store,
+      botChannels: { list: async () => ['Cpublic', 'Cprivate'], names: async () => ({}), team: async () => 'T1' },
+      permissions: { role: ROLES.OWNER, isOwner: true, isManager: false, managedChannelIds: null },
+      cachet,
+      flaron,
+      slack,
+      startedAt: Date.now(),
+      statusEvents: [],
+    });
+
+    const cards = Object.fromEntries(stats.channels.map((c) => [c.id, c]));
+    assert.deepEqual(
+      cards.Cpublic.flaron,
+      { known: true, source: 'flaron', members: 27, humans: 7, bots: 20 },
+      'a public channel is described by Flaron',
+    );
+    assert.equal(cards.Cpublic.managers.length, 1);
+    assert.equal(cards.Cpublic.managers[0].userId, 'U0AEYDUCLKF');
+    assert.equal(cards.Cpublic.managers[0].imageUrl, 'https://img/j.png', 'the manager gets a picture');
+    assert.deepEqual(
+      cards.Cprivate.flaron,
+      { known: false, source: 'slack', members: 45, humans: null, bots: null },
+      'a private channel falls back to the Slack headcount and says so',
+    );
+    assert.deepEqual(cards.Cprivate.managers, [], 'no manager is invented for a private channel');
+    assert.equal(typeof cards.Cpublic.stats.total, 'number', 'each card carries huddle totals');
+    store.close();
+  });
+
+  it('tags leaderboard rows that manage a channel', async () => {
+    const store = await createTestStore();
+    store.upsertHuddleChannel({ channelId: 'Cbot', name: 'j-log' });
+    store.awardHuddlePoints('U1', 40, 'Cbot');
+    const stats = await buildDashboardStats({
+      store,
+      botChannels: { list: async () => ['Cbot'], names: async () => ({}), team: async () => 'T1' },
+      permissions: { role: ROLES.OWNER, isOwner: true, isManager: false, managedChannelIds: null },
+      cachet: null,
+      flaron: { list: async () => ({ Cbot: { members: 5, humans: 4, bots: 1, managers: ['U1'] } }) },
+      startedAt: Date.now(),
+      statusEvents: [],
+    });
+    const row = stats.leaderboard[0];
+    assert.ok(row, 'the board has someone on it');
+    assert.equal(row.channelManager, true, 'a manager is flagged so the board can tag them');
+    store.close();
+  });
+
+  it('refuses to wipe the attributed table when scoring produces nothing', async () => {
+    const store = await createTestStore();
+    store.upsertHuddleChannel({ channelId: 'Cbot' });
+    const startedAt = Math.floor(Date.now() / 1000) - 7200;
+    store.upsertHuddle({
+      callId: 'R1',
+      channelId: 'Cbot',
+      createdBy: 'U1',
+      startedAt,
+      endedAt: startedAt + 600,
+      participantHistory: ['U1'],
+    });
+    store.setHuddleStatus('R1', 'ended', startedAt + 600);
+    store.awardHuddlePoints('U1', 40, 'Cbot');
+    assert.equal(store.huddlePointTotals().rows, 1, 'a working attributed row exists');
+    // A scoring bug that returns nothing for every huddle must not replace a
+    // working board with an empty one.
+    assert.throws(
+      () =>
+        store.rebuildHuddleChannelPoints(() => {
+          throw new Error('scoring exploded');
+        }),
+      /keeping the existing table/,
+    );
+    const after = store.huddlePointTotals();
+    assert.equal(after.rows, 1, 'the row is still there');
+    assert.equal(after.attributed, 40, 'and still has its points');
+    store.close();
+  });
+
+  it('sends the Slack token request form encoded with a grant type', async (t) => {
+    const store = await createTestStore();
+    const auth = createDashboardAuth({
+      client: createSlackClientDouble(),
+      store,
+      logger: { warn: mock.fn(), error: mock.fn() },
+      slackClientId: '123.456',
+      slackClientSecret: 'secret',
+    });
+    const originalFetch = globalThis.fetch;
+    const seen = [];
+    t.after(() => {
+      globalThis.fetch = originalFetch;
+    });
+    globalThis.fetch = async (url, options = {}) => {
+      seen.push({ url: String(url), options });
+      if (String(url).includes('openid.connect.token')) {
+        return new Response(JSON.stringify({ ok: true, access_token: 'xoxp-test', id_token: '' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, user: { id: 'U0AEYDUCLKF', name: 'jacob' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    // The dashboard sits behind Caddy, so the proto arrives as a forwarded
+    // header; the redirect uri has to be rebuilt from that on every request.
+    await assert.doesNotReject(
+      auth.exchangeSlackCode(
+        { headers: { host: 'asteria.navaratne.uk', 'x-forwarded-proto': 'https' }, socket: {} },
+        'code-123',
+      ),
+    );
+    const tokenCall = seen.find((call) => call.url.includes('openid.connect.token'));
+    assert.ok(tokenCall, 'the token endpoint was called');
+    assert.equal(
+      tokenCall.options.headers['content-type'],
+      'application/x-www-form-urlencoded',
+      'Slack rejects a JSON body here',
+    );
+    // The body has to be a URLSearchParams, not an object, or Slack sees no fields.
+    assert.ok(tokenCall.options.body instanceof URLSearchParams, 'the body is url encoded');
+    const fields = Object.fromEntries(tokenCall.options.body);
+    assert.equal(fields.grant_type, 'authorization_code', 'the grant type must be explicit');
+    assert.equal(fields.code, 'code-123');
+    assert.equal(fields.redirect_uri, 'https://asteria.navaratne.uk/auth/slack/callback');
+    assert.equal(fields.client_id, '123.456');
+    assert.equal(fields.client_secret, 'secret');
+    store.close();
   });
 });

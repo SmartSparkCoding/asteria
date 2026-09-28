@@ -1234,24 +1234,23 @@ export async function createStore(databasePath, options = {}) {
         channelIds.forEach((channelId, index) => {
           params[`$channel_${index}`] = channelId;
         });
-        // huddle_leaderboard is the lifetime total and also holds every
-        // attributed point, so summing both tables would count twice. Start
-        // from the lifetime total and subtract only the points we can prove
-        // landed outside the scope, which keeps the huddles that predate
-        // huddle_channel_points (all of them, until attribution shipped)
-        // instead of silently dropping them.
+        // Scope off the attributed copy only. huddle_channel_points is written
+        // alongside huddle_leaderboard for every award that has a channel, so it
+        // is the only table that can answer "points in THESE channels". Starting
+        // from the lifetime total and subtracting the points we can prove landed
+        // elsewhere cannot work: any untracked channel that was never attributed
+        // stays in the total, which is exactly how untracked people ended up on
+        // the board. rebuildHuddleChannelPoints backfills the attribution for
+        // huddles that predate it.
         return bindAndFetchAll(
           database,
           `
-          SELECT user_id, SUM(points) AS points FROM (
-            SELECT user_id, points FROM huddle_leaderboard
-            UNION ALL
-            SELECT user_id, -points AS points FROM huddle_channel_points
-            WHERE channel_id NOT IN (${placeholders})
-          )
+          SELECT user_id, SUM(points) AS points
+          FROM huddle_channel_points
+          WHERE channel_id IN (${placeholders})
+            AND user_id NOT IN (SELECT slack_user_id FROM dashboard_users WHERE leaderboard_opt_in = 0)
           GROUP BY user_id
           HAVING SUM(points) > 0
-            AND user_id NOT IN (SELECT slack_user_id FROM dashboard_users WHERE leaderboard_opt_in = 0)
           ORDER BY points DESC, user_id ASC
           LIMIT $limit
         `,
@@ -1271,6 +1270,114 @@ export async function createStore(databasePath, options = {}) {
           $limit: Math.max(1, Math.min(100, limit)),
         },
       );
+    },
+
+    /**
+     * Lifetime points vs the attributed per-channel copy. The attributed table is
+     * what a scoped leaderboard is built from, so a lifetime total with nothing
+     * attributed means every scoped query silently degrades to "no data".
+     */
+    huddlePointTotals() {
+      const lifetime = bindAndFetchOne(database, 'SELECT COALESCE(SUM(points), 0) AS points FROM huddle_leaderboard');
+      const attributed = bindAndFetchOne(
+        database,
+        'SELECT COALESCE(SUM(points), 0) AS points, COUNT(1) AS rows FROM huddle_channel_points',
+      );
+      return {
+        lifetime: Number(lifetime.points) || 0,
+        attributed: Number(attributed.points) || 0,
+        rows: Number(attributed.rows) || 0,
+      };
+    },
+
+    /**
+     * Rebuild huddle_channel_points from the huddles themselves. `computeAwards`
+     * is injected (rather than imported) so the store keeps no dependency on the
+     * scoring layer, and so a full replace can never double count: this wipes
+     * the attributed copy and rewrites it from the source huddles.
+     */
+    rebuildHuddleChannelPoints(computeAwards) {
+      if (typeof computeAwards !== 'function') {
+        throw new TypeError('rebuildHuddleChannelPoints requires a computeAwards function');
+      }
+      const huddles = bindAndFetchAll(
+        database,
+        "SELECT * FROM huddles WHERE status = 'ended' AND channel_id IS NOT NULL AND channel_id != ''",
+      );
+      const totals = new Map();
+      let failed = 0;
+      for (const huddle of huddles) {
+        let awards;
+        try {
+          awards = computeAwards(huddle, this.listHuddleMembers(huddle.call_id));
+        } catch {
+          // One unreadable huddle must not abandon the whole rebuild.
+          failed++;
+          continue;
+        }
+        if (!awards) {
+          failed++;
+          continue;
+        }
+        const entries = awards instanceof Map ? awards : new Map(Object.entries(awards));
+        for (const [userId, value] of entries) {
+          if (!userId || !huddle.channel_id) {
+            continue;
+          }
+          const raw = typeof value === 'object' && value !== null ? value.points : value;
+          const points = Math.max(0, Math.floor(Number(raw) || 0));
+          if (!points) {
+            continue;
+          }
+          const key = `${huddle.channel_id}\u0000${userId}`;
+          totals.set(key, (totals.get(key) || 0) + points);
+        }
+      }
+      // The delete below is destructive, and a scoring bug that made every huddle
+      // fail would otherwise replace a working board with an empty one. Refuse
+      // instead, so the next run can try again with the same old data intact.
+      if (huddles.length && !totals.size) {
+        throw new Error(
+          `rebuildHuddleChannelPoints computed no points from ${huddles.length} huddle(s); keeping the existing table`,
+        );
+      }
+      bindAndRun(database, 'DELETE FROM huddle_channel_points');
+      let points = 0;
+      for (const [key, total] of totals) {
+        const [channelId, userId] = key.split('\u0000');
+        points += total;
+        bindAndRun(
+          database,
+          `
+          INSERT INTO huddle_channel_points (channel_id, user_id, points, updated_at)
+          VALUES ($channel_id, $user_id, $points, CURRENT_TIMESTAMP)
+          ON CONFLICT(channel_id, user_id) DO UPDATE SET
+            points = excluded.points,
+            updated_at = CURRENT_TIMESTAMP
+        `,
+          { $channel_id: channelId, $user_id: userId, $points: total },
+        );
+      }
+      return { huddles: huddles.length, rows: totals.size, points, failed };
+    },
+
+    /** Remember a channel name we learned from Slack so it survives a restart. */
+    setHuddleChannelName(channelId, name) {
+      const clean = String(name || '')
+        .trim()
+        .replace(/^#/, '');
+      if (!channelId || !clean) {
+        return false;
+      }
+      bindAndRun(
+        database,
+        `
+        INSERT INTO huddle_channels (channel_id, name) VALUES ($channel_id, $name)
+        ON CONFLICT(channel_id) DO UPDATE SET name = excluded.name
+      `,
+        { $channel_id: channelId, $name: clean },
+      );
+      return true;
     },
 
     recordTriggerLog({ userId = '', action, detail = '', channelId = '' }) {
