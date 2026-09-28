@@ -18,14 +18,12 @@ export function createDashboardServer({ store, client, botChannels, logger = con
   const cachet = createCachetDirectory({ logger });
   const flaron = createFlaronDirectory({ logger });
   // Flaron will not describe a private channel, so Slack supplies the headcount
-  // for those. conversations.info answers with form encoding here, same as the
-  // rest of this workspace's API calls.
+  // for those. This has to be the SDK's own method: the equivalent
+  // `client.apiCall('conversations.info', …)` answers `unknown_method` on this
+  // app, which looks exactly like a channel with no members.
   const slack = {
     channelSize: async (channelId) => {
-      const response = await client.apiCall('conversations.info', {
-        method: 'POST',
-        body: new URLSearchParams({ channel: channelId, include_num_members: 'true' }),
-      });
+      const response = await client.conversations.info({ channel: channelId, include_num_members: true });
       const total = Number(response?.channel?.num_members);
       return Number.isFinite(total) ? total : null;
     },

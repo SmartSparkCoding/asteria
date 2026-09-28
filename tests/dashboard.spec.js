@@ -11,6 +11,7 @@ import { createDashboardServer } from '../src/dashboard/server.js';
 import { buildDashboardStats } from '../src/dashboard/stats.js';
 import { backfillChannelPoints } from '../src/database/backfill-channel-points.js';
 import { createStore } from '../src/database/store.js';
+import { createBotChannelDirectory } from '../src/services/bot-channels.js';
 
 let createdPaths = [];
 
@@ -32,7 +33,14 @@ function createSlackClientDouble() {
   return {
     conversations: {
       open: mock.fn(async ({ user }) => ({ channel: { id: `D${user}` } })),
+      // The real client answers `unknown_method` when this is reached through
+      // client.apiCall instead, so the double only has the SDK shape to offer.
+      info: mock.fn(async ({ channel }) => ({ ok: true, channel: { id: channel, name: 'resolved-name' } })),
     },
+    apiCall: mock.fn(async () => {
+      throw new Error('unknown_method');
+    }),
+    auth: { test: mock.fn(async () => ({ user_id: 'U0BOT', team_id: 'T0266FRGM' })) },
     chat: {
       postMessage: mock.fn(async () => ({ ts: '1.1' })),
     },
@@ -741,6 +749,22 @@ describe('dashboard markup', () => {
     assert.ok(row, 'the board has someone on it');
     assert.equal(row.channelManager, true, 'a manager is flagged so the board can tag them');
     store.close();
+  });
+
+  it('resolves channel names through the SDK, never a raw apiCall', async () => {
+    const client = createSlackClientDouble();
+    const directory = createBotChannelDirectory({ client, logger: { info: mock.fn(), warn: mock.fn() } });
+    const resolved = await directory.names(['C0B9YFSE6MN']);
+    assert.equal(resolved.C0B9YFSE6MN, 'resolved-name', 'the name came back');
+    assert.equal(client.conversations.info.mock.callCount(), 1, 'conversations.info was used');
+    assert.equal(
+      client.apiCall.mock.callCount(),
+      0,
+      'client.apiCall answers unknown_method on this app and fails silently',
+    );
+    const again = await directory.names(['C0B9YFSE6MN']);
+    assert.deepEqual(again, resolved, 'the second call is served from cache');
+    assert.equal(client.conversations.info.mock.callCount(), 1, 'without asking Slack again');
   });
 
   it('refuses to wipe the attributed table when scoring produces nothing', async () => {

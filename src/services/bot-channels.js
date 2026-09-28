@@ -112,19 +112,17 @@ export function createBotChannelDirectory({ client, logger }) {
    * were seeded from ids), and the huddle rows only carry a name if something
    * happened to record one, so without this the dashboard prints raw `C…` ids.
    *
-   * `conversations.info` is called with form encoding on purpose: this workspace
-   * answers a JSON body with `invalid_arguments` and silently loses the `channel`
-   * argument, which looks like the channel does not exist.
+   * This goes through the SDK's own `conversations.info`. Reaching for
+   * `client.apiCall('conversations.info', …)` instead, with a form encoded body
+   * or a JSON one, answers `unknown_method` on this app even though the token is
+   * fine, and that failure is silent because it looks like "no name".
    */
   async function names(channelIds) {
     const wanted = [...new Set((channelIds || []).filter(Boolean))].filter((id) => !nameCache.has(id));
     for (const id of wanted) {
       try {
-        const response = await client.apiCall('conversations.info', {
-          method: 'POST',
-          body: new URLSearchParams({ channel: id }),
-        });
-        if (response?.ok && response.channel?.name) {
+        const response = await client.conversations.info({ channel: id });
+        if (response?.channel?.name) {
           nameCache.set(id, response.channel.name.replace(/^#/, ''));
         } else if (response?.error) {
           logger?.info?.(`Could not resolve a name for ${id}: ${response.error}`);
