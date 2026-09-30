@@ -59,6 +59,23 @@ before(async () => {
   store.openHuddleAttendance(CALL, IN_THE_HUDDLE, nowSec() - 900);
   store.closeHuddleAttendance(CALL, IN_THE_HUDDLE, nowSec() - 300);
   store.saveHuddleAwards(CALL, CHANNEL, new Map([[IN_THE_HUDDLE, { points: 24, reasons: ['10m', 'rank 1'] }]]));
+  // The owner was in the call but earned nothing, so the live roster holds two
+  // people while the page's points table holds one. Both are right: the feed
+  // reports who attended, the table reports who was awarded for.
+  store.upsertHuddleMember({
+    callId: CALL,
+    userId: IN_THE_HUDDLE,
+    firstSeenAt: nowSec() - 900,
+    lastSeenAt: nowSec() - 300,
+    isIn: false,
+  });
+  store.upsertHuddleMember({
+    callId: CALL,
+    userId: OWNER,
+    firstSeenAt: nowSec() - 850,
+    lastSeenAt: nowSec() - 300,
+    isIn: false,
+  });
 
   server = createDashboardServer({
     store,
@@ -147,8 +164,25 @@ describe('huddle pages', () => {
     assert.equal(data.callId, CALL);
     assert.equal(data.isLive, false, 'an ended huddle is not live');
     assert.equal(data.totalPoints, 24);
+    assert.equal(data.participants, 2, 'the feed reports the roster, including whoever earned nothing');
+    assert.equal(data.totalPoints, 24, 'and the points come from awards, not the head count');
+    assert.equal(typeof data.isLive, 'boolean');
 
     assert.equal((await get(`/api/huddle/${CALL}/live`, cookies[NOT_IN_IT])).status, 404);
     assert.equal((await get(`/api/huddle/${CALL}/live`)).status, 401);
+  });
+
+  it('tags the two counters that change during a live huddle', async () => {
+    const res = await get(`/${CALL}`, cookies[OWNER]);
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    // A live huddle polls this feed, so the numbers that move need to be
+    // addressable. Without this the poll can only notice the huddle ended.
+    assert(html.includes('data-live="participants"'), 'the head count is updatable');
+    assert(html.includes('data-live="points"'), 'and so is the total');
+    const participants = /data-live="participants"[^>]*>([0-9]+)</.exec(html);
+    assert(participants && participants[1] === '2', 'it starts showing the real head count');
+    const points = /data-live="points"[^>]*>([0-9]+)</.exec(html);
+    assert(points && points[1] === '24', 'and the real points, which come from awards not the roster');
   });
 });

@@ -151,9 +151,11 @@ export function renderHuddlePage(view) {
 
   // `text: true` is a name rather than a figure, so it gets the smaller type.
   const facts = [
-    { label: 'Points awarded', value: `${totalPoints}` },
+    // data-live marks the two numbers that move while the huddle is still going,
+    // so the poller below can update them without reloading the page.
+    { label: 'Points awarded', value: `${totalPoints}`, live: 'points' },
     { label: 'Length', value: formatHuddleLength(durationSeconds) },
-    { label: 'In the huddle', value: `${participants.length}` },
+    { label: 'In the huddle', value: `${participants.length}`, live: 'participants' },
     { label: 'Started by', value: startedByName, text: true },
   ];
 
@@ -228,10 +230,10 @@ export function renderHuddlePage(view) {
   <dl class="facts">
 ${facts
   .map(
-    ({ label, value, text }) =>
+    ({ label, value, text, live }) =>
       `    <div class="fact"><dt>${escapeHtml(label)}</dt><dd${
-        text ? ' style="font-size:15px"' : ''
-      }>${escapeHtml(value)}</dd></div>`,
+        live ? ` data-live="${live}"` : ''
+      }${text ? ' style="font-size:15px"' : ''}>${escapeHtml(value)}</dd></div>`,
   )
   .join('\n')}
   </dl>
@@ -265,6 +267,15 @@ ${
       if (!response.ok) break;
       const data = await response.json();
       if (!data.isLive) { location.reload(); return; }
+      // Show the movement rather than only using the poll to notice the end.
+      // A number that silently stays at its first value is worse than no
+      // live view, because it looks like a huddle nobody is in.
+      for (const [key, value] of [['participants', data.participants], ['points', data.totalPoints]]) {
+        const node = document.querySelector('[data-live="' + key + '"]');
+        if (node && Number.isFinite(value) && node.textContent !== String(value)) {
+          node.textContent = String(value);
+        }
+      }
     } catch { break; }
     await new Promise((r) => setTimeout(r, 5000));
   }
