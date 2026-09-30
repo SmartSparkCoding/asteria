@@ -958,8 +958,18 @@ function formatHuddleSummary(huddle, timezone, baseUrl = '') {
     ? DateTime.fromSeconds(huddle.started_at, { zone: timezone || 'UTC' }).toFormat('d LLL yyyy, HH:mm')
     : 'unknown date';
   const channelId = huddle.channel_id || '';
-  const channel =
-    channelId.startsWith('D') || channelId.startsWith('G') ? 'a DM' : channelId ? `<#${channelId}>` : 'unknown channel';
+  // A private channel is not named or linked. `<#id>` resolves to the channel
+  // name for anyone who is in it, which is the leak, so the owner gets the raw
+  // id and everyone else gets a neutral label.
+  const channel = huddle.privateChannel
+    ? huddle.isOwnerUser
+      ? `private channel (${channelId})`
+      : 'a private channel'
+    : channelId.startsWith('D') || channelId.startsWith('G')
+      ? 'a DM'
+      : channelId
+        ? `<#${channelId}>`
+        : 'unknown channel';
   const status = huddle.status === 'active' ? ' · :large_blue_circle: active now' : '';
   // The link only exists for a huddle we can prove a host for, and only for a
   // huddle that has actually got a call id, so it is never a dead link.

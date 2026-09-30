@@ -46,6 +46,16 @@ export function createDashboardServer({
       const total = Number(response?.channel?.num_members);
       return Number.isFinite(total) ? total : null;
     },
+    // Same endpoint, different question. `is_private` is tri-state on the way
+    // out for the same reason the column is: an unanswered lookup must not be
+    // read as "public".
+    channelPrivacy: async (channelId) => {
+      const response = await client.conversations.info({ channel: channelId });
+      if (!response?.channel || response.channel.is_private == null) {
+        return null;
+      }
+      return response.channel.is_private ? 1 : 0;
+    },
   };
   const auth = createDashboardAuth({
     client,

@@ -24,7 +24,7 @@ import { computeHuddlePoints, parseParticipantHistory } from '../huddles/points.
  */
 export function backfillHuddleAwards({ store, logger = console, batchLogEvery = 100 } = {}) {
   const huddles = store.listHuddles();
-  const result = { reconstructed: 0, skipped: 0, pagesFilled: 0, alreadyStored: 0 };
+  const result = { reconstructed: 0, skipped: 0, pagesFilled: 0, alreadyStored: 0, noAttendance: 0 };
 
   for (const huddle of huddles) {
     const callId = huddle.call_id;
@@ -50,9 +50,25 @@ export function backfillHuddleAwards({ store, logger = console, batchLogEvery = 
       continue;
     }
 
+    // Use the stored intervals, never the first_seen/last_seen span. Passing no
+    // attendance at all makes computeHuddleStats fall back to exactly the single
+    // span that produced the original overcount, so a "reconstruction" built
+    // that way would put the broken number back on the page.
+    const attendance = store.computeHuddleAttendance(callId, {
+      startedAt: huddle.started_at,
+      endedAt: huddle.ended_at,
+    });
+    if (!attendance || (attendance.participants?.length ?? 0) === 0) {
+      // No intervals were ever recorded, so there is nothing honest to rebuild
+      // from. Say so on the page rather than inventing a figure.
+      result.noAttendance += 1;
+      continue;
+    }
+
     const awards = computeHuddlePoints({
       huddle,
       members,
+      attendance,
       participantHistory: parseParticipantHistory(huddle),
       // Intentionally null. The longest and shortest message were never kept, so
       // passing null leaves them out instead of guessing.
@@ -61,6 +77,12 @@ export function backfillHuddleAwards({ store, logger = console, batchLogEvery = 
     if (awards.size === 0) {
       result.skipped += 1;
       continue;
+    }
+    // The page keys its "this was rebuilt" banner off this exact reason, so it
+    // has to be written here or the page shows a total with no explanation of
+    // where the number came from.
+    for (const entry of awards.values()) {
+      entry.reasons.push('backfilled');
     }
     store.saveHuddleAwards(callId, huddle.channel_id || '', awards);
     result.reconstructed += 1;
@@ -71,6 +93,7 @@ export function backfillHuddleAwards({ store, logger = console, batchLogEvery = 
 
   logger.info?.(
     `[huddle-awards] reconstructed ${result.reconstructed}, already stored ${result.alreadyStored}, ` +
+      `no attendance to rebuild from ${result.noAttendance}, ` +
       `skipped ${result.skipped} (no channel, or never ended)`,
   );
   return result;
