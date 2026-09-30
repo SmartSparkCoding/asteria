@@ -104,8 +104,9 @@ function reasonLabel(reason) {
   if (/^\d+m$/.test(reason)) {
     return `${reason} in the call`;
   }
-  if (/^rank /.test(reason)) {
-    return reason;
+  if (reason === 'backfilled') {
+    // Not a per person award, a marker saying where the whole table came from.
+    return 'rebuilt from recorded attendance';
   }
   return reason;
 }
@@ -139,6 +140,10 @@ export function renderHuddlePage(view) {
     attendancePartial = false,
   } = view;
 
+  // Naming the channel here is deliberate even when it is private. Reaching this
+  // page already requires being the owner or a participant, and somebody who was
+  // in a private channel already knows its name, so hiding it here would tell
+  // them nothing. The surfaces that need hiding are the ones anyone can load.
   const channelLabel = channel.name
     ? `#${channel.name}`
     : huddle.channel_id

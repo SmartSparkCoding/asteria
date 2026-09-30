@@ -1,4 +1,5 @@
 import { ROLES } from './permissions.js';
+import { canShowPeople, channelLabel } from './privacy.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -51,7 +52,7 @@ export async function buildDashboardStats({
   // cannot see, which could not have scored anyway.
   const scopeChannelIds = channels.map((channel) => channel.channel_id).filter((id) => id && channelIds.includes(id));
   const leaderboardRows = store.listHuddleLeaderboard(25, scopeChannelIds);
-  const leaderboard = await withProfiles({
+  const rawLeaderboard = await withProfiles({
     rows: leaderboardRows.map((row, index) => ({
       rank: index + 1,
       userId: row.user_id,
@@ -60,6 +61,31 @@ export async function buildDashboardStats({
     cachet,
     store,
   });
+
+  // The dashboard is served to anyone holding the URL, with no sign-in, so a
+  // named leaderboard here publishes who was in which channel's huddles. A
+  // private channel's scores are exactly the thing that must not leak, and the
+  // board mixes channels together, so the only honest public answer is the
+  // number with no name attached.
+  //
+  // Opting out of the board is a separate promise and still applies on top.
+  // A session at all is a real gate: it exists because the viewer signed in
+  // through Slack and proved workspace membership. That is a different promise
+  // from "anyone holding the URL", and it is what keeps the leaderboard useful
+  // for the people who are in the workspace without publishing it to the web.
+  const isSignedIn = permissions.role != null;
+  const showNames = isSignedIn || isOwner || isManager;
+  const leaderboard = showNames
+    ? rawLeaderboard
+    : rawLeaderboard.map((row, index) => ({
+        rank: index + 1,
+        userId: '',
+        displayName: `Member ${index + 1}`,
+        realName: '',
+        pronouns: '',
+        imageUrl: '',
+        points: row.points,
+      }));
 
   const logs = isOwner ? store.listTriggerLog(25, channelIds) : [];
 
@@ -72,6 +98,28 @@ export async function buildDashboardStats({
   // A channel can be saved with a blank name, and huddle rows only carry a name
   // when something recorded one, so ask Slack for the ones we are missing and
   // remember the answer instead of rendering a raw id forever.
+  // is_private is tri-state and -1 means "never checked". Nothing else in the
+  // app wrote it, so every channel sat at unknown forever and the dashboard
+  // published all of them by accident. Ask Slack once per channel that is still
+  // unknown, remember the answer, and let the privacy rules below do the rest.
+  if (slack?.channelPrivacy) {
+    await Promise.all(
+      channels
+        .filter((channel) => Number(channel.is_private) === -1)
+        .map(async (channel) => {
+          const isPrivate = await slack.channelPrivacy(channel.channel_id).catch(() => null);
+          if (isPrivate === null) {
+            // A failed lookup leaves it at -1, which still reads as private.
+            return;
+          }
+          channel.is_private = isPrivate;
+          if (typeof store.setHuddleChannelPrivacy === 'function') {
+            store.setHuddleChannelPrivacy(channel.channel_id, isPrivate);
+          }
+        }),
+    );
+  }
+
   const unnamed = channels.filter((channel) => !channel.name).map((channel) => channel.channel_id);
   if (unnamed.length && typeof botChannels.names === 'function') {
     const resolved = await botChannels.names(unnamed);
@@ -133,7 +181,13 @@ export async function buildDashboardStats({
       const fromSlack = slackSizes.has(channel.channel_id);
       return {
         id: channel.channel_id,
-        name: channel.name || channel.channel_id,
+        isPrivate: Number(channel.is_private) === 0 ? 0 : Number(channel.is_private) === 1 ? 1 : -1,
+        name: channelLabel({
+          name: channel.name,
+          channelId: channel.channel_id,
+          isPrivate: channel.is_private,
+          canIdentify: isSignedIn,
+        }),
         inBot: channelIds.includes(channel.channel_id),
         enabled: !!channel.enabled,
         autoReplies: !!channel.auto_replies,
@@ -152,21 +206,33 @@ export async function buildDashboardStats({
           visibleHuddles.filter((huddle) => huddle.channel_id === channel.channel_id),
           now,
         ),
-        managers: parseJsonArray(channel.owner_ids)
-          .map((userId) => {
-            const profile = managerProfiles[userId] || {};
-            const onBoard = leaderboard.find((row) => row.userId === userId);
-            return {
-              userId,
-              displayName: profile.displayName || userId,
-              realName: profile.realName || '',
-              pronouns: profile.pronouns || '',
-              imageUrl: profile.imageUrl || (cachet ? cachet.avatarUrl(userId) : ''),
-              rank: onBoard?.rank ?? null,
-              points: onBoard?.points ?? null,
-            };
-          })
-          .filter((manager) => manager.userId),
+        // Managers are named people. A viewer who is not allowed to see people
+        // in this channel gets a count instead, which still tells the dashboard
+        // how the channel is run without naming anyone.
+        managers: canShowPeople({
+          isPrivate: channel.is_private,
+          isOwner,
+          isManager,
+          permissions,
+          channelId: channel.channel_id,
+        })
+          ? parseJsonArray(channel.owner_ids)
+              .map((userId) => {
+                const profile = managerProfiles[userId] || {};
+                const onBoard = leaderboard.find((row) => row.userId === userId);
+                return {
+                  userId,
+                  displayName: profile.displayName || userId,
+                  realName: profile.realName || '',
+                  pronouns: profile.pronouns || '',
+                  imageUrl: profile.imageUrl || (cachet ? cachet.avatarUrl(userId) : ''),
+                  rank: onBoard?.rank ?? null,
+                  points: onBoard?.points ?? null,
+                };
+              })
+              .filter((manager) => manager.userId)
+          : [],
+        managerCount: parseJsonArray(channel.owner_ids).length,
       };
     }),
   );

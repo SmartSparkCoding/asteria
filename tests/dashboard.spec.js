@@ -247,10 +247,22 @@ describe('dashboard server', () => {
       const owner = await signIn(harness);
       const user = await signIn(harness, { slackUserId: 'U0PLAIN01' });
 
+      // Anonymous is anyone with the URL, so the board is numbers only. The
+      // points still have to be right; the names are what must not ship.
       const anonymous = await (await fetch(`${harness.base}/api/stats`)).json();
       assert.deepEqual(
         anonymous.leaderboard.map((row) => row.userId),
-        ['U0AEYDUCLKF', 'U0PLAIN01'],
+        ['', ''],
+        'an anonymous viewer gets no Slack ids on the leaderboard',
+      );
+      assert.deepEqual(
+        anonymous.leaderboard.map((row) => row.displayName),
+        ['Member 1', 'Member 2'],
+      );
+      assert.deepEqual(
+        anonymous.leaderboard.map((row) => row.points),
+        [50, 30],
+        'and the points themselves are unchanged',
       );
 
       const optOut = await fetch(`${harness.base}/api/me/opt-in`, {
@@ -450,8 +462,10 @@ describe('dashboard stats', () => {
     const store = await createTestStore();
     // A channel configured from its id has no name anywhere, which is the
     // production case that made the dashboard print a raw C... id.
-    store.upsertHuddleChannel({ channelId: 'Cunknown' });
-    store.upsertHuddleChannel({ channelId: 'Cnamed', name: 'already-known' });
+    // Positively public. An unseeded channel is 'unknown', which the privacy
+    // rules treat as private, so a public fixture has to actually claim to be one.
+    store.upsertHuddleChannel({ channelId: 'Cunknown', isPrivate: false });
+    store.upsertHuddleChannel({ channelId: 'Cnamed', name: 'already-known', isPrivate: false });
     const seen = [];
     const botChannels = {
       list: async () => ['Cunknown', 'Cnamed'],
@@ -681,8 +695,8 @@ describe('dashboard markup', () => {
 
   it('describes each channel for the popup with Flaron, Slack or nothing', async () => {
     const store = await createTestStore();
-    store.upsertHuddleChannel({ channelId: 'Cpublic', name: 'j-log' });
-    store.upsertHuddleChannel({ channelId: 'Cprivate', name: 'tinkering' });
+    store.upsertHuddleChannel({ channelId: 'Cpublic', name: 'j-log', isPrivate: false });
+    store.upsertHuddleChannel({ channelId: 'Cprivate', name: 'tinkering', isPrivate: true });
     const slackSizes = { Cprivate: 45 };
     const flaron = {
       list: async () => ({
@@ -909,7 +923,7 @@ describe('dashboard scoping and channel owners', () => {
 
   it('adopts the Flaron creator as the first owner, then leaves App Home edits alone', async () => {
     const store = await createTestStore();
-    store.upsertHuddleChannel({ channelId: 'Cjlog', name: 'j-log' });
+    store.upsertHuddleChannel({ channelId: 'Cjlog', name: 'j-log', isPrivate: false });
     // Flaron already makes the channel creator its owner, so that is who the
     // website should show as the CM without anyone touching App Home.
     const flaron = {

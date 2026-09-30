@@ -1778,6 +1778,35 @@ export async function createStore(databasePath, options = {}) {
       }));
     },
 
+    /**
+     * Record just the public/private answer for a channel.
+     *
+     * Deliberately narrow. `upsertHuddleChannel` writes the whole row, so using
+     * it to remember a privacy lookup would reset the name, the owner list and
+     * the toggles to whatever the caller happened to have in hand.
+     */
+    setHuddleChannelPrivacy(channelId, isPrivate) {
+      if (!channelId) {
+        return false;
+      }
+      // Preserve the tri-state. `isPrivate ? 1 : 0` would turn -1 (unknown)
+      // into 1 (private), which is a different and much stronger claim than the
+      // caller made, and a raw 0 for a failed lookup would claim "public".
+      const value = Number(isPrivate) === 0 ? 0 : Number(isPrivate) === 1 ? 1 : -1;
+      bindAndRun(
+        database,
+        `
+        INSERT INTO huddle_channels (channel_id, is_private) VALUES ($channel_id, $is_private)
+        ON CONFLICT(channel_id) DO UPDATE SET
+          is_private = excluded.is_private,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+        { $channel_id: channelId, $is_private: value },
+      );
+      persist();
+      return true;
+    },
+
     upsertHuddleChannel({
       channelId,
       name = '',

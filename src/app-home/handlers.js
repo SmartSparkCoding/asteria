@@ -143,10 +143,25 @@ export function createHomeHandlers({
       settings.daily_question_enabled && lastQuestion?.question_text
         ? formatDailyQuestionMessage(lastQuestion.question_text, settings.daily_question_reply_text)
         : '';
+    // The App Home is a DM, so the reader is a workspace member rather than
+    // anyone with a URL, but membership of the workspace is not membership of a
+    // private channel. A huddle in a private channel is therefore shown without
+    // the channel it happened in, so the list cannot be used to discover that a
+    // private channel is active.
+    const viewerIsOwner = userId === settings.personal_channel_owner_id;
     const huddles = store
       .listHuddles()
       .filter((huddle) => huddle.channel_id && huddle.status !== 'opted_out')
-      .slice(0, 10);
+      .slice(0, 10)
+      .map((huddle) => {
+        const isPrivate = store.getHuddleChannel?.(huddle.channel_id)?.is_private ?? -1;
+        // Only a positive private answer hides the channel here. Slack renders
+        // `<#C...>` as the name for members and as a generic string for
+        // everyone else, so an unchecked channel is already gated by Slack
+        // itself, and treating -1 as private would blank out every channel until
+        // something happened to load the dashboard first.
+        return { ...huddle, privateChannel: Number(isPrivate) === 1, isOwnerUser: viewerIsOwner };
+      });
     const isOwnerUser = userId === settings.personal_channel_owner_id;
     const isChannelOwnerUser = !isOwnerUser && isChannelOwner(userId);
     // Everyone sees the same leaderboard, scoped to the channels the bot is in.
