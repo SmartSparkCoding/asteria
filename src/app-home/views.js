@@ -1,4 +1,5 @@
 import { DateTime } from 'luxon';
+import { huddlePageUrl } from '../huddles/urls.js';
 import { DEFAULT_QUESTION_PROMPT } from '../services/ai.js';
 import { contentToMrkdwn } from '../utils/messages.js';
 import { normalizeTimeValue } from '../utils/time.js';
@@ -973,8 +974,7 @@ function formatHuddleSummary(huddle, timezone, baseUrl = '') {
   const status = huddle.status === 'active' ? ' · :large_blue_circle: active now' : '';
   // The link only exists for a huddle we can prove a host for, and only for a
   // huddle that has actually got a call id, so it is never a dead link.
-  const link =
-    baseUrl && huddle.call_id ? ` · <${baseUrl}/huddle/${encodeURIComponent(huddle.call_id)}|open stats>` : '';
+  const link = huddle.call_id && baseUrl ? ` · <${huddlePageUrl(baseUrl, huddle.call_id)}|open stats>` : '';
   return `• ${channel} · ${startLabel}${status}${link}`;
 }
 

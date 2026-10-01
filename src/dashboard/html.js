@@ -450,6 +450,7 @@ h1 .accent{color:var(--accent-bright)}
 .who-name-row{display:flex;align-items:center;gap:6px;min-width:0}
 .who-name{font-size:14px;font-weight:520;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .who-sub{font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.avatar-hidden{background:var(--raised);border:1px dashed var(--line);color:transparent}
 .pts{font-family:var(--mono);font-size:14px;font-variant-numeric:tabular-nums}
 .pts.zero{color:var(--ink-3)}
 
@@ -641,6 +642,9 @@ footer{display:flex;justify-content:space-between;align-items:center;gap:12px;fl
 .warnrow .ic{color:var(--red);flex:0 0 auto;font-weight:700}
 `;
 
+// NOTE: this is a server side template literal, so any dollar-brace inside it is
+// interpolated before the browser sees it. Client code here must build strings
+// with concatenation, not template literals. A stray one throws at import time.
 const SCRIPT = `
 const $ = (id) => document.getElementById(id);
 const base = document.documentElement.dataset.base || '';
@@ -716,6 +720,12 @@ function slackProfileUrl(userId){
 }
 
 function avatarNode(row, name){
+  if (row.anonymised){
+    const span = document.createElement('span');
+    span.className = 'avatar avatar-hidden';
+    span.title = 'Hidden until you sign in';
+    return span;
+  }
   if (row.imageUrl){
     const img = document.createElement('img');
     img.className = 'avatar';
@@ -737,8 +747,12 @@ function avatarNode(row, name){
 }
 
 function boardRow(row, viewer, existing){
-  const name = row.displayName || row.userId;
-  const sub = [row.pronouns, row.realName && row.realName !== name ? row.realName : ''].filter(Boolean).join(' / ');
+  // An anonymous row has no name, so there is nothing to take initials from and
+  // "Member 3" would put a meaningless "M3" in the avatar circle.
+  const name = row.displayName || row.userId || '';
+  const sub = row.anonymised
+    ? 'sign in to see who this is'
+    : [row.pronouns, row.realName && row.realName !== name ? row.realName : ''].filter(Boolean).join(' / ');
   const node = existing ? existing.li : document.createElement('li');
   if (!existing){
     node.innerHTML = '<span class="rank"></span><span class="who-cell">' +
@@ -773,6 +787,12 @@ function boardRow(row, viewer, existing){
 
   const href = slackProfileUrl(row.userId);
   let whoName = nameRow.querySelector('.who-name');
+  // A blank name reads as a loading failure. An anonymous row gets the rank as
+  // its label and one honest line underneath, so the board looks deliberate.
+  // Concatenation, not a template literal: this whole block lives inside a
+  // server side template literal, so a dollar-brace here is interpolated before
+  // it ships and breaks the file.
+  const label = row.anonymised ? '#' + row.rank : name;
   if (href && whoName.tagName !== 'A'){
     const link = document.createElement('a');
     link.className = 'who-name';
@@ -780,8 +800,8 @@ function boardRow(row, viewer, existing){
     whoName.parentNode.replaceChild(link, whoName);
     whoName = link;
   }
-  if (whoName.textContent !== name) {
-    whoName.textContent = name;
+  if (whoName.textContent !== label) {
+    whoName.textContent = label;
   }
   if (href && whoName.getAttribute('href') !== href) {
     whoName.setAttribute('href', href);
@@ -816,14 +836,15 @@ function renderBoard(rows, viewer){
   }
   const next = new Map();
   rows.forEach((row) => {
-    const existing = boardRows.get(row.userId);
+    const key = row.key || row.userId;
+    const existing = boardRows.get(key);
     const li = boardRow(row, viewer, existing);
-    next.set(row.userId, { li: li, userId: row.userId, imageUrl: row.imageUrl });
+    next.set(key, { li: li, userId: row.userId, imageUrl: row.imageUrl });
 
     board.appendChild(li);
   });
-  for (const [userId, entry] of boardRows){
-    if (!next.has(userId)) entry.li.remove();
+  for (const [key, entry] of boardRows){
+    if (!next.has(key)) entry.li.remove();
   }
   boardRows = next;
 }

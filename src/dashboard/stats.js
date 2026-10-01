@@ -75,17 +75,25 @@ export async function buildDashboardStats({
   // for the people who are in the workspace without publishing it to the web.
   const isSignedIn = permissions.role != null;
   const showNames = isSignedIn || isOwner || isManager;
-  const leaderboard = showNames
-    ? rawLeaderboard
-    : rawLeaderboard.map((row, index) => ({
-        rank: index + 1,
-        userId: '',
-        displayName: `Member ${index + 1}`,
-        realName: '',
-        pronouns: '',
-        imageUrl: '',
-        points: row.points,
-      }));
+  // Anonymous rows carry no userId on purpose, but the browser keys its board on
+  // one, so each gets a stable per-rank key instead. An empty key would collapse
+  // every row onto a single DOM node on the second poll.
+  const leaderboard = rawLeaderboard.map((row, index) => {
+    if (showNames) {
+      return { ...row, key: row.userId };
+    }
+    return {
+      rank: index + 1,
+      userId: '',
+      key: `anon-${index + 1}`,
+      displayName: '',
+      realName: '',
+      pronouns: '',
+      imageUrl: '',
+      points: row.points,
+      anonymised: true,
+    };
+  });
 
   const logs = isOwner ? store.listTriggerLog(25, channelIds) : [];
 

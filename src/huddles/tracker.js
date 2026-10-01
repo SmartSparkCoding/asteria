@@ -7,6 +7,7 @@ import {
   resolveHuddleThreadMessageStats,
 } from './review.js';
 import { nextUserHuddleAction } from './state.js';
+import { huddlePageUrl } from './urls.js';
 
 const GENERATE_REVIEW_ACTION_ID = 'generate_huddle_review';
 const OPT_OUT_ACTION_ID = 'huddle_opt_out';
@@ -146,12 +147,7 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
   // Every huddle links back to its own page. Built from the configured public
   // host rather than guessed from the request, because a wrong host in a public
   // channel is a published link pointing somewhere unintended.
-  function huddleUrl(callId) {
-    if (!baseUrl || !callId) {
-      return '';
-    }
-    return `${baseUrl}/huddle/${encodeURIComponent(callId)}`;
-  }
+  const huddleUrl = (callId) => huddlePageUrl(baseUrl, callId);
 
   // The summary says "1 hr" or "25 min". formatDuration is for the detail views,
   // where "1m 30s" is useful; in a one-liner it reads badly.

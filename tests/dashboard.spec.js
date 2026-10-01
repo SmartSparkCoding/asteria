@@ -257,7 +257,17 @@ describe('dashboard server', () => {
       );
       assert.deepEqual(
         anonymous.leaderboard.map((row) => row.displayName),
-        ['Member 1', 'Member 2'],
+        ['', ''],
+        'a placeholder name would be as identifying as the real one',
+      );
+      assert.deepEqual(
+        anonymous.leaderboard.map((row) => row.key),
+        ['anon-1', 'anon-2'],
+        'each row still gets a unique key, or the board collapses to one node on the next poll',
+      );
+      assert.ok(
+        anonymous.leaderboard.every((row) => row.anonymised),
+        'and the client can tell an anonymised row from a real one',
       );
       assert.deepEqual(
         anonymous.leaderboard.map((row) => row.points),

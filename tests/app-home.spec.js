@@ -981,7 +981,7 @@ describe('App Home handlers', () => {
 
     const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
     const text = view.blocks.filter((block) => block.type === 'section').at(-1).text.text;
-    assert(text.includes('<https://asteria.test/huddle/R2|open stats>'), 'the overview links to the huddle page');
+    assert(text.includes('<https://asteria.test/R2|open stats>'), 'the overview links to the huddle page');
     assert(!text.includes('DM prompt'), 'and does not claim a prompt arrives by DM');
     store.close();
   });

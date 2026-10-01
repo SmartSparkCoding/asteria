@@ -681,7 +681,7 @@ describe('huddle tracker integration', () => {
     const started = textsPosted(client).find((text) => text.includes('Huddle started'));
     assert.ok(started, 'the start notice went out');
     assert(
-      started.includes('https://asteria.test/huddle/Rlink'),
+      started.includes('https://asteria.test/Rlink'),
       'and it links to the huddle page, not to some guessed host',
     );
 
@@ -709,7 +709,7 @@ describe('huddle tracker integration', () => {
     assert(summary.includes('awarded for the 1 min huddle'), 'it states how long it was');
     assert(summary.includes('started by name-UOWNER'), 'who started it, by name not mention');
     assert(!summary.includes('<@'), 'and it pings nobody');
-    assert(summary.includes('https://asteria.test/huddle/Rlink'), 'with the link');
+    assert(summary.includes('https://asteria.test/Rlink'), 'with the link');
 
     tracker.stop();
   });
@@ -760,7 +760,7 @@ describe('huddle tracker integration', () => {
     assert.equal(countButtonPosts(client, 'generate_huddle_review'), 0, 'condensed: no review button at all');
     const summary = textsPosted(client).find((text) => text.startsWith('! '));
     assert.ok(summary, 'condensed still posts the summary and the link');
-    assert(summary.includes('https://asteria.test/huddle/Rcond'));
+    assert(summary.includes('https://asteria.test/Rcond'));
 
     tracker.stop();
   });
