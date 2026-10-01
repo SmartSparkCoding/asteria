@@ -144,6 +144,17 @@ export function createDashboardServer({
    * automatically allowed: owning a channel is not the same as having been on
    * the call, and these pages carry the per person breakdown.
    */
+  // Only ever bounce back to a path on this site. An absolute URL here would
+  // turn the sign-in link into an open redirect, so anything that is not a
+  // plain single-slash path is refused and treated as "nowhere in particular".
+  function safeNextRoute(value) {
+    const next = String(value || '');
+    if (!next || !next.startsWith('/') || next.startsWith('//')) {
+      return '';
+    }
+    return next;
+  }
+
   function canViewHuddle(callId, auth_) {
     if (!auth_) {
       return false;
@@ -441,12 +452,20 @@ people who were in the huddle.</p></div></body></html>`;
       const state = auth.randomState();
       const nonce = auth.randomState();
       const cookieAttrs = `Path=/; HttpOnly; SameSite=Lax; Max-Age=600${isSecure(req) ? '; Secure' : ''}`;
+      // Remember where they were going. Without this, following a huddle link
+      // while signed out dropped you on the dashboard after signing in, which
+      // looks exactly like the link did nothing.
+      const next = safeNextRoute(url.searchParams.get('next'));
       res.writeHead(302, {
         location: auth.slackAuthorizeUrl(req, state, nonce),
-        // Two cookies, so they have to be an array. Joining them into one header
+        // Three cookies, so they have to be an array. Joining them into one header
         // with "; " is parsed inconsistently and silently dropped the nonce, which
         // turned the nonce check in the callback into a no-op.
-        'set-cookie': [`asteria_oauth_state=${state}; ${cookieAttrs}`, `asteria_oauth_nonce=${nonce}; ${cookieAttrs}`],
+        'set-cookie': [
+          `asteria_oauth_state=${state}; ${cookieAttrs}`,
+          `asteria_oauth_nonce=${nonce}; ${cookieAttrs}`,
+          `${next ? `asteria_oauth_next=${encodeURIComponent(next)}; ${cookieAttrs}` : ''}`,
+        ].filter(Boolean),
         'cache-control': 'no-store',
       });
       res.end();
@@ -471,11 +490,12 @@ people who were in the huddle.</p></div></body></html>`;
           permissions,
         });
         res.writeHead(302, {
-          location: '/',
+          location: safeNextRoute(decodeURIComponent(cookies.asteria_oauth_next || '')) || '/',
           'set-cookie': [
             sessionCookie(token, req),
             'asteria_oauth_state=; Path=/; Max-Age=0',
             'asteria_oauth_nonce=; Path=/; Max-Age=0',
+            'asteria_oauth_next=; Path=/; Max-Age=0',
           ],
           'cache-control': 'no-store',
         });
@@ -634,6 +654,17 @@ people who were in the huddle.</p></div></body></html>`;
         participants: store.listHuddleMembers(callId).length,
         totalPoints: awards.reduce((sum, award) => sum + award.points, 0),
       });
+      return;
+    }
+
+    // Early on, huddle links were posted as /huddle/<id>, which no route ever
+    // matched, so every one of them is a 404 sitting in somebody's channel
+    // history right now. The page has always lived at /<id>. Send the old shape
+    // to the new one rather than leaving those links dead, and rather than
+    // having to recall and repost each summary.
+    const legacyHuddleMatch = /^\/huddle\/(R[0-9A-Z]{6,20})$/.exec(route);
+    if (legacyHuddleMatch && method === 'GET') {
+      redirect(res, `/${legacyHuddleMatch[1]}`);
       return;
     }
 
