@@ -1369,6 +1369,89 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
     });
   });
 
+  // The golf bit. Someone mentions golf, the inspector, or AIC inside a huddle
+  // thread and we answer back with a canned line and a fistful of emoji.
+  //
+  // The cooldown is on the thread, not on the person: the first trigger arms it
+  // for a minute and then anybody who is not a Channel Manager is told why they
+  // got nothing. Each of those gets told once, as an ephemeral, so a room full of
+  // people saying "golf" gets one quiet line each rather than five. Channel
+  // Managers are never blocked, so they can make the joke as often as they like.
+  const GOLF_COOLDOWN_SECONDS = 60;
+  const golfThreadAt = new Map();
+  // Keyed by `thread:user:arm`, valued by the arm that produced it, so pruning
+  // can drop rows on the same rule as golfThreadAt.
+  const golfNoticeSeen = new Map();
+  const GOLF_TRIGGERS = /\b(golf|inspector|aic)\b/i;
+  const GOLF_REPLIES = ['i dont play golf', "someone forgot that the inspector doesn't play golf"];
+  const GOLF_EMOJI = [':feels-the-aura:', ':pet-brny:', ':peak:', ':golf:', ':freddie-silly:'].join(' ');
+
+  async function replyWithTheGolfBit(replyClient, channelId, message) {
+    const reply = GOLF_REPLIES[Math.floor(Math.random() * GOLF_REPLIES.length)];
+    const parentTs = message.thread_ts || message.ts;
+    try {
+      await replyClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: parentTs,
+        text: `${reply} ${GOLF_EMOJI}`,
+      });
+    } catch (error) {
+      logger.warn?.('Could not reply to the golf bit', error);
+    }
+  }
+
+  async function handleGolfBit(payload) {
+    const message = payload.message ?? payload.event ?? payload;
+    // The event payload does not always carry a client, so fall back to the one
+    // the tracker was built with — the same way huddle mentions do it.
+    const golfClient = payload.client ?? client;
+    // Our own replies contain the trigger words, and so does any other bot.
+    // Answering one of those would be an infinite loop with an audience.
+    if (message?.subtype || message?.bot_id || message?.user === undefined) {
+      return;
+    }
+    const text = message?.text || '';
+    if (!text || !GOLF_TRIGGERS.test(text)) {
+      return;
+    }
+    const parentTs = message.thread_ts || message.ts;
+    const channelId = huddleChannelForThread(parentTs);
+    if (!channelId) {
+      // The bit lives in a huddle thread, not in every channel we happen to be in.
+      return;
+    }
+    const userId = String(message.user || '');
+    const rules = channelRules(channelId);
+    const isManager = isChannelOwner(rules, userId);
+    const now = nowEpochSeconds();
+    const lastAt = golfThreadAt.get(parentTs) || 0;
+    const cooling = lastAt > 0 && now - lastAt < GOLF_COOLDOWN_SECONDS;
+
+    if (cooling && !isManager) {
+      // Keyed by the arm that started the cooldown, not just by person, so the
+      // next cooldown cycle tells them again. Keyed by person alone would leave
+      // them being ignored in silence the second time round.
+      const seenKey = `${parentTs}:${userId}:${lastAt}`;
+      if (!golfNoticeSeen.has(seenKey)) {
+        golfNoticeSeen.set(seenKey, lastAt);
+        try {
+          await golfClient.chat.postEphemeral({
+            channel: channelId,
+            user: userId,
+            thread_ts: parentTs,
+            text: 'There is a 1 minute cooldown on this, and that applies even when it was accidental.',
+          });
+        } catch (error) {
+          logger.warn?.('Could not send the golf cooldown notice', error);
+        }
+      }
+      return;
+    }
+
+    golfThreadAt.set(parentTs, now);
+    await replyWithTheGolfBit(golfClient, channelId, message);
+  }
+
   app.message(async (payload) => {
     const message = payload.message ?? payload.event ?? payload;
     if (message?.subtype === 'huddle_thread') {
@@ -1379,6 +1462,13 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
       } catch (error) {
         logger.error('Handle huddle_thread message', error);
       }
+    }
+    // Runs after the huddle bookkeeping: the golf bit needs the thread to be
+    // known already, and its failures must never affect any of that.
+    try {
+      await handleGolfBit(payload);
+    } catch (error) {
+      logger.error('Handle golf bit', error);
     }
     void handleHuddleMention({
       message,
@@ -1411,6 +1501,20 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
     void sweepStaleHuddles().catch((error) => {
       logger.error('Sweep stale huddles', error);
     });
+    // The golf bit keeps two Maps keyed by thread. An arm older than the
+    // cooldown can never be reached again, so its rows are dead weight in a
+    // long-lived process; drop them on the same cadence as the stale sweep.
+    const golfCutoff = nowEpochSeconds() - GOLF_COOLDOWN_SECONDS;
+    for (const [key, at] of golfThreadAt) {
+      if (at < golfCutoff) {
+        golfThreadAt.delete(key);
+      }
+    }
+    for (const [key, at] of golfNoticeSeen) {
+      if (at < golfCutoff) {
+        golfNoticeSeen.delete(key);
+      }
+    }
   }, STALE_SWEEP_INTERVAL_MS);
   sweepTimer.unref?.();
 
