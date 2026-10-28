@@ -1,7 +1,7 @@
-import { createAsteriaRuntime } from './src/asteria.js';
+import { createOrbitRuntime } from './src/orbit.js';
 
 async function main() {
-  const { app, scheduler, store, syncPoller, webhookServer, dashboardServer } = await createAsteriaRuntime();
+  const { app, scheduler, store, syncPoller, webhookServer, dashboardServer } = await createOrbitRuntime();
 
   const dashboardPort = Number(process.env.ASTERIA_DASHBOARD_PORT || 8787);
   const dashboardHost = process.env.ASTERIA_DASHBOARD_HOST || '0.0.0.0';
@@ -26,10 +26,10 @@ async function main() {
   scheduler.start();
   syncPoller.start();
   await dashboardServer.listen(dashboardPort, dashboardHost);
-  app.logger.info('Asteria is running in Socket Mode.');
+  app.logger.info("Jacob's Orbit is running in Socket Mode.");
 }
 
 main().catch((error) => {
-  console.error('Asteria failed to start:', error);
+  console.error("Jacob's Orbit failed to start:", error);
   process.exit(1);
 });

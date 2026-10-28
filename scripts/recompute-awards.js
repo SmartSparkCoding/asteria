@@ -10,8 +10,9 @@
  *   node scripts/recompute-awards.js --apply
  *   systemctl start asteria.service
  */
-import { createStore } from '../src/database/store.js';
+
 import { recomputeMissingHuddleAwards } from '../src/database/recompute-awards.js';
+import { createStore } from '../src/database/store.js';
 
 const apply = process.argv.includes('--apply');
 const dbArg = process.argv.find((arg) => arg.startsWith('--db='));

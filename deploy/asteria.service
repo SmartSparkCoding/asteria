@@ -1,5 +1,5 @@
 [Unit]
-Description=Asteria Slack bot
+Description=Jacob's Orbit Slack bot
 After=network-online.target
 Wants=network-online.target
 

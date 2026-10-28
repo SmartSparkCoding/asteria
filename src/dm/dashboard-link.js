@@ -67,7 +67,7 @@ export function registerDmDashboardLink({ app, client, auth, store, logger, base
     try {
       await client.chat.postMessage({
         channel: message.channel,
-        text: `Here is your Asteria dashboard link: ${link} It signs you in straight away and expires in 10 minutes. If you did not ask for it, ignore this message and nothing happens.`,
+        text: `Here is your Orbit dashboard link: ${link} It signs you in straight away and expires in 10 minutes. If you did not ask for it, ignore this message and nothing happens.`,
       });
       store?.recordTriggerLog?.({
         userId: slackUserId,

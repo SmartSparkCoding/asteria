@@ -2,8 +2,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DateTime } from 'luxon';
-import { createPermissions, isSlackUserId, parseOwnerIds } from '../permissions.js';
 import { describeHuddleChannels } from '../huddles/channels.js';
+import { createPermissions, isSlackUserId, parseOwnerIds } from '../permissions.js';
 import { buildStatusRss, readStatusEvents } from '../status/status-core.js';
 import { createDashboardAuth } from './auth.js';
 import { createCachetDirectory } from './cachet.js';
@@ -11,7 +11,9 @@ import { createFlaronDirectory } from './flaron.js';
 import { renderDashboardHtml } from './html.js';
 import { renderHuddlePage } from './huddle-page.js';
 import { resolvePermissions } from './permissions.js';
+import { isLegacyHost, renderRebrandPage } from './rebrand.js';
 import { buildDashboardStats } from './stats.js';
+import { ORBIT_FAVICON } from './theme.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SESSION_COOKIE = 'asteria_session';
@@ -196,14 +198,14 @@ export function createDashboardServer({
     return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow,noarchive">
-<title>Not found · Asteria</title>
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<title>Not found · Jacob's Orbit</title>
+<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(ORBIT_FAVICON)}" type="image/svg+xml">
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d1117;color:#c9d1d9;
 font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;text-align:center;padding:24px}
 a{color:#2ea043}h1{color:#f0f6fc;font-size:20px;margin:0 0 8px}p{margin:0;font-size:14px}</style>
 </head><body><div><h1>No such huddle</h1>
 <p>If this is your huddle, <a href="/login">sign in with Slack</a> and try again.</p>
-<p style="margin-top:14px;font-size:13px;color:#8b949e">Huddle pages are only visible to Asteria's owner and to
+<p style="margin-top:14px;font-size:13px;color:#8b949e">Huddle pages are only visible to Orbit's owner and to
 people who were in the huddle.</p></div></body></html>`;
   }
 
@@ -445,6 +447,21 @@ people who were in the huddle.</p></div></body></html>`;
       const events = readStatusEvents(eventsFilePath);
       res.writeHead(200, { 'content-type': 'application/rss+xml; charset=utf-8', 'cache-control': 'no-store' });
       res.end(buildStatusRss({ events, siteUrl: auth.publicUrl(req) }));
+      return;
+    }
+
+    // The old host stops being a product and becomes a notice. Health and RSS
+    // keep working so a monitor never starts paging during the move, auth
+    // callbacks are allowed through so a sign in that started on the old domain
+    // finishes, and the API keeps answering so a tab left open does not break.
+    if (
+      method === 'GET' &&
+      isLegacyHost(req.headers.host) &&
+      !route.startsWith('/auth/') &&
+      !route.startsWith('/api/') &&
+      route !== '/avatar'
+    ) {
+      sendHtml(res, 200, renderRebrandPage({ path: url.pathname, search: url.search }));
       return;
     }
 

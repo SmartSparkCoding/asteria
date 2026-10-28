@@ -23,7 +23,7 @@ function getLogLevel(logLevel) {
   return LogLevel.INFO;
 }
 
-export async function createAsteriaRuntime() {
+export async function createOrbitRuntime() {
   const environment = loadEnvironment();
   const store = await createStore(environment.databasePath, {
     ownerId: environment.personalChannelOwnerId,

@@ -12,8 +12,8 @@ const CHANNELS_CATEGORY = 'channels';
 const HUDDLES_CATEGORY = 'huddles';
 
 const CATEGORY_TABS = [
-  { id: CHANNELS_CATEGORY, label: 'Channel Manager', appOwnerOnly: true },
-  { id: HUDDLES_CATEGORY, label: 'Huddles' },
+  { id: CHANNELS_CATEGORY, label: 'Orbit Channel Management', appOwnerOnly: true },
+  { id: HUDDLES_CATEGORY, label: 'Orbit Huddles' },
 ];
 
 const SUB_TABS = {
@@ -135,7 +135,7 @@ function buildDailyUpdateView({ settings, draft, questionPreview, notice, naviga
     type: 'home',
     callback_id: 'asteria_home_daily_update',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       buildTopSummary(settings),
@@ -267,14 +267,14 @@ function buildDailyQuestionView({ settings, notice, recentQuestions, navigation 
     type: 'home',
     callback_id: 'asteria_home_daily_question',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: 'Write the AI prompt and configure when Asteria posts a Daily Question each day.',
+          text: 'Write the AI prompt and configure when Orbit posts a Daily Question each day.',
         },
       },
       {
@@ -424,14 +424,14 @@ function buildWelcomerView({ settings, notice, navigation }) {
     type: 'home',
     callback_id: 'asteria_home_welcomer',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: 'Configure the welcome message that Asteria sends when someone joins the personal channel.',
+          text: 'Configure the welcome message that Orbit sends when someone joins the personal channel.',
         },
       },
       {
@@ -539,7 +539,7 @@ function buildSyncView({ settings, notice, isOwner, navigation }) {
     type: 'home',
     callback_id: 'asteria_home_sync',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
@@ -693,7 +693,7 @@ function buildHomeAssistantView({ settings, notice, isOwner, stepsSummary, navig
     type: 'home',
     callback_id: 'asteria_home_home_assistant',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
@@ -804,14 +804,14 @@ function buildSettingsView({ settings, notice, navigation }) {
     type: 'home',
     callback_id: 'asteria_home_settings',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: 'General settings for Asteria, including timezone, reminder timing, the personal channel, and the Daily Update ping group.',
+          text: 'General settings for Orbit, including timezone, reminder timing, the personal channel, and the Daily Update ping group.',
         },
       },
       {
@@ -828,10 +828,10 @@ function buildSettingsView({ settings, notice, navigation }) {
         element: {
           type: 'plain_text_input',
           action_id: 'bot_display_name',
-          initial_value: settings.bot_display_name || 'Asteria',
+          initial_value: settings.bot_display_name || "Jacob's Orbit",
           placeholder: {
             type: 'plain_text',
-            text: 'Name shown when Asteria posts as the bot',
+            text: 'Name shown when Orbit posts as the bot',
           },
         },
       },
@@ -983,7 +983,7 @@ export function buildHuddlesView({ huddles, notice, timezone, navigation, baseUr
     type: 'home',
     callback_id: 'asteria_home_huddles',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
@@ -993,7 +993,7 @@ export function buildHuddlesView({ huddles, notice, timezone, navigation, baseUr
           // The old copy said a review could be generated from a DM prompt.
           // Prompts are thread-only now, so anyone reading it would have gone
           // looking for a button that is not there.
-          text: "Huddles from channels Asteria is in, most recent first. Open the stats for any huddle; the recap prompt, if one was sent, is in that huddle's Slack thread.",
+          text: "Huddles from channels Orbit is in, most recent first. Open the stats for any huddle; the recap prompt, if one was sent, is in that huddle's Slack thread.",
         },
       },
       ...(huddles.length > 0
@@ -1026,7 +1026,7 @@ export function buildLeaderboardView({ leaderboard, notice, navigation }) {
     type: 'home',
     callback_id: 'asteria_home_leaderboard',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
@@ -1171,7 +1171,7 @@ export function buildHuddleChannelsView({ channels, available = [], notice, navi
     type: 'home',
     callback_id: 'asteria_home_huddle_channels',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Huddle channels' } },
+      { type: 'header', text: { type: 'plain_text', text: 'Orbit Huddle channels' } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
@@ -1241,7 +1241,7 @@ export function buildLogsView({ logs, notice, timezone, navigation }) {
     type: 'home',
     callback_id: 'asteria_home_logs',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
@@ -1279,14 +1279,14 @@ export function buildDeleteView({ notice, navigation }) {
     type: 'home',
     callback_id: 'asteria_home_delete',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Asteria' } },
+      { type: 'header', text: { type: 'plain_text', text: "Jacob's Orbit" } },
       ...buildBanner(notice),
       ...(navigation ?? []),
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: 'Paste a link to any message I (Asteria) sent and I will delete it — no matter what it is or where it lives.',
+          text: 'Paste a link to any message I (Orbit) sent and I will delete it — no matter what it is or where it lives.',
         },
       },
       {

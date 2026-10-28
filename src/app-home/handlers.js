@@ -1,5 +1,5 @@
-import { createHomeAssistantService } from '../services/home-assistant.js';
 import { describeHuddleChannels } from '../huddles/channels.js';
+import { createHomeAssistantService } from '../services/home-assistant.js';
 import {
   addUserToUserGroup,
   fetchUserGroups,
@@ -692,7 +692,7 @@ export function createHomeHandlers({
         body.user.id,
         'channels',
         'daily-update',
-        ':x: Asteria could not send the Daily Update. Your draft was preserved.',
+        ':x: Orbit could not send the Daily Update. Your draft was preserved.',
       );
     }
   }
@@ -823,7 +823,7 @@ export function createHomeHandlers({
         body.user.id,
         'channels',
         'daily-question',
-        ':x: Asteria could not send the test Daily Question.',
+        ':x: Orbit could not send the test Daily Question.',
       );
     }
   }

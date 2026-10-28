@@ -4,9 +4,9 @@
     "minor_version": 1
   },
   "display_information": {
-    "name": "J-Log Manager",
-    "description": "Clone of ASTERIA",
-    "background_color": "#158551"
+    "name": "Jacob's Orbit",
+    "description": "Jacob's Orbit tracks huddles, scores them, and runs your Daily Update.",
+    "background_color": "#1e1e2e"
   },
   "features": {
     "app_home": {
@@ -15,7 +15,7 @@
       "messages_tab_read_only_enabled": false
     },
     "bot_user": {
-      "display_name": "Asteria",
+      "display_name": "Orbit",
       "always_online": true
     }
   },
@@ -41,6 +41,8 @@
       ]
     },
     "redirect_urls": [
+      "https://orbit.mini-jacob.hackclub.app/auth/slack/callback",
+      "https://orbit.navaratne.uk/auth/slack/callback",
       "https://asteria.navaratne.uk/auth/slack/callback",
       "https://asteria.mini-jacob.hackclub.app/auth/slack/callback"
     ],

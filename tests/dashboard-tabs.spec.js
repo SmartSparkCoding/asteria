@@ -79,8 +79,8 @@ describe('tabbed pages', () => {
   it('serves each tab to the owner with the tab marked current', async () => {
     for (const [route, label] of [
       ['/j-log', 'j-log manager'],
-      ['/huddles', 'Huddle customisation'],
-      ['/admin', 'Admin panel'],
+      ['/huddles', 'Orbit Huddles'],
+      ['/admin', 'Orbit Admin'],
     ]) {
       const html = await (await get(route, ownerCookie)).text();
       assert(html.includes(label), `${route} shows its tab`);
@@ -186,9 +186,9 @@ describe('tabbed pages', () => {
 
   it('hides the owner tabs and pages from a manager', async () => {
     const html = await (await get('/huddles', managerCookie)).text();
-    assert(html.includes('Huddle customisation'));
+    assert(html.includes('Orbit Huddles'));
     assert(!html.includes('j-log manager'), 'no j-log tab');
-    assert(!html.includes('Admin panel'), 'no admin tab');
+    assert(!html.includes('Orbit Admin'), 'no admin tab');
 
     for (const route of ['/j-log', '/admin']) {
       assert.equal((await get(route, managerCookie)).status, 403, `${route} is owner only`);

@@ -1,7 +1,7 @@
 {
-  "name": "asteria",
+  "name": "orbit",
   "version": "1.0.0",
-  "description": "A cloneable personal channel companion bot for Slack",
+  "description": "Jacob's Orbit: a Slack companion that tracks huddles, scores them, and runs your daily channel.",
   "type": "module",
   "main": "app.js",
   "scripts": {

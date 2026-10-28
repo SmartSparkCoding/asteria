@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Jacob's Orbit">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="38%" r="62%">
+      <stop offset="0%" stop-color="#cba6f7" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#cba6f7" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="#11111b"/>
+  <rect width="512" height="512" rx="96" fill="url(#glow)"/>
+  <g fill="none" stroke-linecap="round">
+    <circle cx="256" cy="256" r="92" fill="#cba6f7" stroke="none"/>
+    <ellipse cx="256" cy="256" rx="196" ry="84" transform="rotate(-24 256 256)" stroke="#b4befe" stroke-width="16"/>
+    <circle cx="424" cy="168" r="26" fill="#89b4fa" stroke="none"/>
+  </g>
+</svg>

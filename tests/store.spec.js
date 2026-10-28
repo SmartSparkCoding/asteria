@@ -15,7 +15,7 @@ afterEach(() => {
   createdPaths = [];
 });
 
-describe('Asteria store', () => {
+describe('Orbit store', () => {
   it('persists settings and drafts across restarts', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asteria-store-'));
     const databasePath = path.join(tempDir, 'asteria.sqlite');
@@ -66,7 +66,7 @@ describe('Asteria store', () => {
     createdPaths.push(databasePath);
 
     let store = await createStore(databasePath);
-    assert.equal(store.getSettings().bot_display_name, 'Asteria');
+    assert.equal(store.getSettings().bot_display_name, "Jacob's Orbit");
     store.updateSettings({ bot_display_name: 'Star' });
     assert.equal(store.getSettings().bot_display_name, 'Star');
     store.close();
@@ -74,7 +74,7 @@ describe('Asteria store', () => {
     store = await createStore(databasePath);
     assert.equal(store.getSettings().bot_display_name, 'Star');
     store.updateSettings({ bot_display_name: '   ' });
-    assert.equal(store.getSettings().bot_display_name, 'Asteria');
+    assert.equal(store.getSettings().bot_display_name, "Jacob's Orbit");
     store.close();
   });
 

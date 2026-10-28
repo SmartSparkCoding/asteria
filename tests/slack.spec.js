@@ -50,7 +50,7 @@ describe('Daily Update owner masking', () => {
     assert.equal(result.messageTs, '111.222');
   });
 
-  it('falls back to the Asteria bot identity when the owner profile cannot be read', async () => {
+  it('falls back to the Orbit bot identity when the owner profile cannot be read', async () => {
     const client = {
       users: {
         profile: {
@@ -83,7 +83,7 @@ describe('Daily Update owner masking', () => {
     });
 
     const callArgs = client.chat.postMessage.mock.calls[0].arguments[0];
-    assert.equal(callArgs.username, 'Asteria');
+    assert.equal(callArgs.username, "Jacob's Orbit");
     assert.equal(callArgs.icon_emoji, undefined);
     assert.equal(callArgs.icon_url, undefined);
   });
@@ -128,7 +128,7 @@ describe('Daily Update owner masking', () => {
     assert.equal(mainCall.username, 'Jordan');
     const threadCall = client.chat.postMessage.mock.calls[1].arguments[0];
     assert.equal(threadCall.thread_ts, undefined);
-    assert.equal(threadCall.username, 'Asteria');
+    assert.equal(threadCall.username, "Jacob's Orbit");
     assert.equal(threadCall.icon_emoji, undefined);
     assert.equal(result.threadTs, '555.666');
   });

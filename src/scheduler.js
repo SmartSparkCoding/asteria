@@ -76,7 +76,7 @@ export function createScheduler({ store, aiService, client, logger, environment 
       await sendDirectMessage(
         client,
         settings.personal_channel_owner_id,
-        "You have not sent your Daily Update yet today. Open Asteria's App Home to write and send it.",
+        "You have not sent your Daily Update yet today. Open Orbit's App Home to write and send it.",
         { kind: 'reminder', ownerUserId: settings.personal_channel_owner_id, logger },
       );
       store.completeScheduledJob(jobKey, localDate, { sent: true });

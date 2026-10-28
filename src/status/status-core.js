@@ -62,11 +62,11 @@ export function buildStatusRss({ events, siteUrl }) {
       const isUp = event.state === 'up';
       const when = new Date(event.at).toISOString();
       return `    <item>
-      <title>Asteria is ${isUp ? 'up' : 'down'}</title>
+      <title>Orbit is ${isUp ? 'up' : 'down'}</title>
       <link>${escapeXml(baseUrl)}/</link>
       <guid isPermaLink="false">asteria-status-${escapeXml(event.id)}</guid>
       <pubDate>${toRfc822Date(event.at)}</pubDate>
-      <description>Asteria was ${isUp ? 'up' : 'down'} at ${escapeXml(when)}${event.detail ? ` (${escapeXml(event.detail)})` : ''}.</description>
+      <description>Orbit was ${isUp ? 'up' : 'down'} at ${escapeXml(when)}${event.detail ? ` (${escapeXml(event.detail)})` : ''}.</description>
     </item>`;
     })
     .join('\n');
@@ -74,18 +74,18 @@ export function buildStatusRss({ events, siteUrl }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Asteria is currently ${currentState}</title>
+    <title>Orbit is currently ${currentState}</title>
     <link>${escapeXml(baseUrl)}/</link>
-    <description>Up/down status history for the Asteria Slack bot.</description>
+    <description>Up/down status history for the Orbit Slack bot.</description>
     <language>en</language>
     <lastBuildDate>${lastBuildDate}</lastBuildDate>
     <atom:link href="${escapeXml(baseUrl)}/rss.xml" rel="self" type="application/rss+xml"/>
     <item>
-      <title>Asteria is currently ${currentState}</title>
+      <title>Orbit is currently ${currentState}</title>
       <link>${escapeXml(baseUrl)}/</link>
       <guid isPermaLink="false">asteria-status-current</guid>
       <pubDate>${lastBuildDate}</pubDate>
-      <description>Current status of the Asteria bot as of ${lastBuildDate}.</description>
+      <description>Current status of the Orbit bot as of ${lastBuildDate}.</description>
     </item>
 ${historyItems}
   </channel>

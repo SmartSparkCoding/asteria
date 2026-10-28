@@ -239,13 +239,13 @@ function buildDailyUpdateIdentity(ownerIdentity, botName) {
   }
 
   return {
-    username: botName || 'Asteria',
+    username: botName || "Jacob's Orbit",
   };
 }
 
 export async function sendDailyUpdate(client, settings, draft, questionText, { sentByUserId, stepsText = '' }) {
   const text = buildDailyUpdateText(settings, draft, questionText, stepsText);
-  const botName = settings.bot_display_name || 'Asteria';
+  const botName = settings.bot_display_name || "Jacob's Orbit";
   const ownerIdentity = await fetchOwnerIdentity(client, settings.personal_channel_owner_id);
   const dailyUpdateIdentity = buildDailyUpdateIdentity(ownerIdentity, botName);
 
@@ -281,7 +281,7 @@ export async function sendDailyQuestion(client, settings, questionText) {
   const response = await client.chat.postMessage({
     channel: settings.personal_channel_id,
     text,
-    username: settings.bot_display_name || 'Asteria',
+    username: settings.bot_display_name || "Jacob's Orbit",
   });
 
   return {
@@ -301,7 +301,7 @@ export async function sendWelcomeMessage(client, settings, { userId }) {
   const response = await client.chat.postMessage({
     channel: settings.personal_channel_id,
     text: messageParts.join('\n\n'),
-    username: settings.bot_display_name || 'Asteria',
+    username: settings.bot_display_name || "Jacob's Orbit",
   });
 
   return response;

@@ -160,8 +160,8 @@ describe('dashboard server', () => {
       assert.equal(page.status, 200);
       assert.match(page.headers.get('content-type'), /text\/html/);
       const html = await page.text();
-      assert.match(html, /Asteria/);
-      assert.match(html, /--accent:#238636/, 'dark theme with the cachet green accent');
+      assert.match(html, /Jacob's Orbit/);
+      assert.match(html, /--accent:#cba6f7/, 'Catppuccin Mocha mauve is the product accent');
       assert.match(html, /color-scheme:dark/);
 
       const health = await fetch(`${harness.base}/health`);
@@ -362,7 +362,7 @@ describe('dashboard server', () => {
         body: JSON.stringify({ slackUserId: 'U0AEYDUCLKF' }),
       });
       assert.equal(response.status, 400, 'the visitor can fix this, so it is not a 500');
-      assert.match((await response.json()).error, /start a chat with the Asteria bot/);
+      assert.match((await response.json()).error, /start a chat with the Orbit bot/);
       // A code that was never delivered must not sit in memory waiting to be
       // guessed for ten minutes.
       const verify = await fetch(`${harness.base}/api/auth/verify`, {
@@ -680,7 +680,7 @@ describe('dashboard markup', () => {
   it('escapes anything user controlled and ships the dark theme tokens', () => {
     const html = renderDashboardHtml({ signedIn: true, role: 'owner', oauthConfigured: true });
     assert.match(html, /color-scheme:dark/);
-    assert.match(html, /--bg:#0d1117/);
+    assert.match(html, /--bg:#1e1e2e/);
     assert.match(html, /class="who" id="who">owner<\/span>/);
     assert.doesNotMatch(html, /<script src=/, 'no external scripts');
   });

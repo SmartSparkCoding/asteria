@@ -12,7 +12,7 @@ const DEFAULT_SETTINGS = {
   personal_channel_owner_id: '',
   personal_channel_id: '',
   timezone: 'UTC',
-  bot_display_name: 'Asteria',
+  bot_display_name: "Jacob's Orbit",
   daily_question_enabled: 1,
   daily_question_prompt: DEFAULT_QUESTION_PROMPT,
   daily_question_include_in_daily_update: 0,
@@ -88,7 +88,7 @@ function sanitizeSettingsPatch(patch) {
   }
 
   if ('bot_display_name' in sanitizedPatch) {
-    sanitizedPatch.bot_display_name = sanitizedPatch.bot_display_name.trim() || 'Asteria';
+    sanitizedPatch.bot_display_name = sanitizedPatch.bot_display_name.trim() || "Jacob's Orbit";
   }
 
   if (sanitizedPatch.daily_question_send_time) {
@@ -234,7 +234,7 @@ export async function createStore(databasePath, options = {}) {
       personal_channel_owner_id TEXT NOT NULL DEFAULT '',
       personal_channel_id TEXT NOT NULL DEFAULT '',
       timezone TEXT NOT NULL DEFAULT 'UTC',
-      bot_display_name TEXT NOT NULL DEFAULT 'Asteria',
+      bot_display_name TEXT NOT NULL DEFAULT 'Jacob''s Orbit',
       daily_question_enabled INTEGER NOT NULL DEFAULT 1,
       daily_question_prompt TEXT NOT NULL DEFAULT '',
       daily_question_include_in_daily_update INTEGER NOT NULL DEFAULT 0,
@@ -484,7 +484,7 @@ export async function createStore(databasePath, options = {}) {
     (column) => column.name,
   );
   if (!existingSettingColumns.includes('bot_display_name')) {
-    bindAndRun(database, "ALTER TABLE app_settings ADD COLUMN bot_display_name TEXT NOT NULL DEFAULT 'Asteria'");
+    bindAndRun(database, "ALTER TABLE app_settings ADD COLUMN bot_display_name TEXT NOT NULL DEFAULT 'Jacob''s Orbit'");
   }
   if (!existingSettingColumns.includes('daily_question_prompt')) {
     bindAndRun(database, "ALTER TABLE app_settings ADD COLUMN daily_question_prompt TEXT NOT NULL DEFAULT ''");

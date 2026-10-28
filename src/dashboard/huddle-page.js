@@ -9,27 +9,18 @@
  * either.
  */
 
-const ACCENT = '#238636';
-const ACCENT_BRIGHT = '#2ea043';
+import { ORBIT_FAVICON, ORBIT_MARK_SVG, THEME_TOKENS } from './theme.js';
 
 const STYLES = `
-:root{color-scheme:dark;
-  --bg:#0d1117; --surface:#161b22; --raised:#21262d; --line:#30363d;
-  --ink:#f0f6fc; --ink-2:#c9d1d9; --ink-3:#8b949e;
-  --accent:${ACCENT}; --accent-bright:${ACCENT_BRIGHT};
-  --gold:#ffd700; --bronze:#cd7f32; --silver:#c0c0c0; --red:#f85149;
-  --r:10px; --r-sm:6px;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-}
+${THEME_TOKENS}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;
-  background:radial-gradient(900px 400px at 50% -8%, rgba(46,160,67,.07), transparent 70%),var(--bg);
+  background:radial-gradient(900px 400px at 50% -8%, var(--tint), transparent 70%),var(--bg);
   -webkit-font-smoothing:antialiased}
 a{color:var(--accent-bright);text-decoration:none}
 a:hover{text-decoration:underline}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;
-  padding:0 clamp(16px,4vw,36px);height:56px;background:rgba(13,17,23,.86);
+  padding:0 clamp(16px,4vw,36px);height:56px;background:var(--glass);
   backdrop-filter:saturate(140%) blur(10px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2}
 .brand{display:flex;align-items:center;gap:9px;color:var(--ink);font-weight:600}
 .brand:hover{text-decoration:none}
@@ -45,7 +36,7 @@ h1{font-size:24px;letter-spacing:-.01em;margin:0 0 4px}
   color:var(--ink-2);padding:4px 10px;border-radius:999px;box-shadow:0 0 0 1px var(--line);margin-left:8px;
   vertical-align:middle}
 .status i{width:6px;height:6px;border-radius:50%;background:var(--ink-3)}
-.status.live i{background:var(--accent-bright);animation:pulse 2.4s infinite}
+.status.live i{background:var(--green);animation:pulse 2.4s infinite}
 .status.ended i{background:var(--ink-3)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:0 0 26px}
@@ -193,15 +184,15 @@ export function renderHuddlePage(view) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow,noarchive">
-<title>Huddle ${escapeHtml(huddle.call_id)} · Asteria</title>
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<title>Huddle ${escapeHtml(huddle.call_id)} · Jacob's Orbit</title>
+<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(ORBIT_FAVICON)}" type="image/svg+xml">
 <style>${STYLES}</style>
 </head>
 <body>
 <header class="topbar">
   <a class="brand" href="/">
-    <span class="mark"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.6c.4 0 .8.3 1 .7l2.4 7.4c.2.5.5.9 1 1l7.4 2.4c.8.3.8 1.4 0 1.7l-7.4 2.4c-.5.2-.9.5-1 1L13 21c-.3.8-1.4.8-1.7 0l-2.4-7.4c-.2-.5-.5-.9-1-1L.5 10.5c-.8-.3-.8-1.4 0-1.7l7.4-2.4c.5-.2.9-.5 1-1L11 3.3c.2-.4.6-.7 1-.7z"/></svg></span>
-    <span class="brand-text">Asteria<em>huddle</em></span>
+    <span class="mark">${ORBIT_MARK_SVG}</span>
+    <span class="brand-text">Jacob's Orbit<em>huddle</em></span>
   </a>
 </header>
 
@@ -213,7 +204,7 @@ export function renderHuddlePage(view) {
 
   ${
     reconstructed
-      ? `<p class="note">This breakdown was rebuilt from the attendance Asteria recorded at the time. The longest
+      ? `<p class="note">This breakdown was rebuilt from the attendance Orbit recorded at the time. The longest
          and shortest message awards were never stored, so they are not included here. New huddles record every
          reason.</p>`
       : ''
@@ -221,13 +212,13 @@ export function renderHuddlePage(view) {
   ${
     attendancePartial
       ? `<p class="note">Some attendance could not be proven. Slack dropped a few join and leave events during
-         this huddle, so the times below are the stretches Asteria can demonstrate and may undercount. Points are
+         this huddle, so the times below are the stretches Orbit can demonstrate and may undercount. Points are
          awarded on that same basis.</p>`
       : ''
   }
   ${
     totalPoints === 0
-      ? `<p class="note">No points were awarded for this huddle. Asteria only awards points for huddles it can
+      ? `<p class="note">No points were awarded for this huddle. Orbit only awards points for huddles it can
          prove it was inside, and this one has no channel it was in.</p>`
       : ''
   }
@@ -255,8 +246,8 @@ ${rows}
       : '<div class="empty">Nobody was recorded in this huddle.</div>'
   }
 
-  <p class="foot">This page is only visible to Asteria's owner and to people who were in this huddle. It is not
-  listed anywhere. Huddle data is Asteria's own; where a channel is private, the numbers here are only ever shown
+  <p class="foot">This page is only visible to Orbit's owner and to people who were in this huddle. It is not
+  listed anywhere. Huddle data is Orbit's own; where a channel is private, the numbers here are only ever shown
   here.</p>
 </main>
 ${

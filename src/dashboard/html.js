@@ -1,5 +1,4 @@
-const ACCENT = '#238636';
-const ACCENT_BRIGHT = '#2ea043';
+import { ORBIT_FAVICON, ORBIT_MARK_SVG, THEME_TOKENS } from './theme.js';
 
 /**
  * The dashboard shell. Deliberately server rendered with a small client script that
@@ -18,7 +17,7 @@ export function renderDashboardHtml({
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Asteria, ${VIEWS[view]?.title || VIEWS.home.title}</title>
+<title>Jacob's Orbit, ${VIEWS[view]?.title || VIEWS.home.title}</title>
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(STAR_FAVICON)}">
 <style>${STYLES}</style>
@@ -27,7 +26,7 @@ export function renderDashboardHtml({
 <header class="topbar">
   <a class="brand" href="/">
     <span class="mark">${STAR_SVG}</span>
-    <span class="brand-text">Asteria<em>live status</em></span>
+    <span class="brand-text">Jacob's Orbit<em>live status</em></span>
   </a>
   <div class="topbar-right">
     <button class="btn ghost" type="button" id="about-open">What is this?</button>
@@ -56,20 +55,20 @@ ${view === 'home' ? homeView() : view === 'j-log' ? jLogView() : view === 'huddl
   <div class="modal-scrim" id="about-scrim"></div>
   <div class="modal-card about-card">
     <div class="cm-head">
-      <h2 class="cm-title" id="about-title"><span class="mark">${STAR_SVG}</span><span>What Asteria does</span></h2>
+      <h2 class="cm-title" id="about-title"><span class="mark">${STAR_SVG}</span><span>What Orbit does</span></h2>
       <button class="cm-close" type="button" id="about-close" aria-label="Close">&#215;</button>
     </div>
 
-    <p class="about-lede">Asteria sits in your Slack channels and keeps score of the huddles that happen in them.
+    <p class="about-lede">Orbit sits in your Slack channels and keeps score of the huddles that happen in them.
       This page is the window into what it has seen.</p>
 
     <h3 class="about-h">A huddle is a voice call</h3>
     <p class="about-p">A huddle is Slack's built-in voice chat, the headphones icon in a channel. Anyone can start
-      one and anyone can pop in and out. Asteria does not record audio. It only reads the roster Slack already
+      one and anyone can pop in and out. Orbit does not record audio. It only reads the roster Slack already
       publishes: who was in the call, and roughly when.</p>
 
     <h3 class="about-h">How it keeps track</h3>
-    <p class="about-p">When people join or leave, Slack sends Asteria an event. Slack also drops some of those
+    <p class="about-p">When people join or leave, Slack sends Orbit an event. Slack also drops some of those
       events, so a huddle it has not heard from for a minute gets checked directly against Slack for the real
       end time. That is why a duration shown here is measured, and not just "when the bot happened to notice".</p>
 
@@ -98,7 +97,7 @@ ${view === 'home' ? homeView() : view === 'j-log' ? jLogView() : view === 'huddl
 </div>
 
 <footer>
-  <span>Asteria, <a href="/health">health</a>, <a href="/rss.xml">rss</a></span>
+  <span>Jacob's Orbit, <a href="/health">health</a>, <a href="/rss.xml">rss</a></span>
   <span class="muted" id="foot-updated"><span class="skel skel-sm"></span></span>
 </footer>
 
@@ -116,9 +115,9 @@ if (document.getElementById('about-modal')) {
 function homeView() {
   return `  <section class="hero">
     <p class="kicker">personal channel companion</p>
-    <h1>Everything Asteria is doing, <span class="accent">right now</span>.</h1>
+    <h1>Everything Orbit is doing, <span class="accent">right now</span>.</h1>
     <p class="sub">Huddles it watched, points it handed out, and how long it has been standing by.
-      New here? <button class="linkish" type="button" id="about-open-2">What Asteria does</button>.</p>
+      New here? <button class="linkish" type="button" id="about-open-2">What Orbit does</button>.</p>
   </section>
 
   <section class="stat-strip" id="stat-strip">
@@ -171,15 +170,15 @@ function homeView() {
 const TABS = [
   { id: 'home', label: 'Dashboard' },
   { id: 'j-log', label: 'j-log manager', owner: true },
-  { id: 'huddles', label: 'Huddle customisation', manager: true },
-  { id: 'admin', label: 'Admin panel', owner: true },
+  { id: 'huddles', label: 'Orbit Huddles', manager: true },
+  { id: 'admin', label: 'Orbit Admin', owner: true },
 ];
 
 const VIEWS = {
   home: { title: 'live dashboard' },
   'j-log': { title: 'j-log manager' },
-  huddles: { title: 'huddle customisation' },
-  admin: { title: 'admin panel' },
+  huddles: { title: 'orbit huddles' },
+  admin: { title: 'orbit admin' },
 };
 
 /**
@@ -256,7 +255,7 @@ function jLogView() {
           <div class="field">
             <label for="q-prompt">Prompt handed to the generator</label>
             <textarea id="q-prompt" rows="4"></textarea>
-            <span class="hint">Asteria writes the question itself from this.</span>
+            <span class="hint">Orbit writes the question itself from this.</span>
           </div>
           <div class="field">
             <label for="q-reply">Reply nudge</label>
@@ -305,8 +304,8 @@ function jLogView() {
 
 function huddlesView() {
   return `  <section class="hero">
-    <p class="kicker">huddle customisation</p>
-    <h1>How Asteria behaves, <span class="accent">per channel</span>.</h1>
+    <p class="kicker">orbit huddles</p>
+    <h1>How Orbit behaves, <span class="accent">per channel</span>.</h1>
     <p class="sub">Turn tracking off to stop the announcements, reviews and points for a channel without
       muting the bot itself, or restrict it so only the managers below can ask it something.</p>
   </section>
@@ -333,7 +332,7 @@ function huddlesView() {
 
 function adminView() {
   return `  <section class="hero">
-    <p class="kicker">admin panel</p>
+    <p class="kicker">orbit admin</p>
     <h1>What the bot can <span class="accent">actually see</span>.</h1>
     <p class="sub">Owner only. This is the honest state of the integration: which channels it is in, what
       Slack will not tell it, and the huddles it recorded but could never place.</p>
@@ -369,24 +368,16 @@ function statCell(id, label, hint) {
 </div>`;
 }
 
-const STAR_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2l2.1 4.6 5 .6-3.7 3.4 1 4.9L12 14.4 7.6 16.7l1-4.9L4.9 8.4l5-.6z"/></svg>`;
-const STAR_FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#0d1117"/><path d="M12 4l2 4.4 4.8.6-3.6 3.3.95 4.7L12 14.7 7.85 17l.95-4.7L5.2 9l4.8-.6z" fill="none" stroke="#2ea043" stroke-width="1.5"/></svg>`;
+const STAR_SVG = ORBIT_MARK_SVG;
+const STAR_FAVICON = ORBIT_FAVICON;
 
 const STYLES = `
-:root{color-scheme:dark;
-  --bg:#0d1117; --surface:#161b22; --raised:#21262d; --line:#30363d; --line-soft:#21262d;
-  --ink:#f0f6fc; --ink-2:#c9d1d9; --ink-3:#8b949e;
-  --accent:${ACCENT}; --accent-bright:${ACCENT_BRIGHT};
-  --gold:#ffd700; --bronze:#cd7f32; --silver:#c0c0c0; --red:#f85149;
-  --r:10px; --r-sm:6px;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-}
+${THEME_TOKENS}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{
   margin:0; min-height:100vh; color:var(--ink); font-family:var(--sans); font-size:15px; line-height:1.5;
-  background:radial-gradient(900px 400px at 50% -8%, rgba(46,160,67,.07), transparent 70%),var(--bg);
+  background:radial-gradient(900px 400px at 50% -8%, var(--glow), transparent 70%),var(--bg);
   -webkit-font-smoothing:antialiased;
 }
 a{color:var(--accent-bright);text-decoration:none}
@@ -396,7 +387,7 @@ a:hover{text-decoration:underline}
 
 /* top bar */
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;
-  padding:0 clamp(16px,4vw,36px);height:56px;background:rgba(13,17,23,.86);
+  padding:0 clamp(16px,4vw,36px);height:56px;background:var(--glass);
   backdrop-filter:saturate(140%) blur(10px);border-bottom:1px solid var(--line);
   position:sticky;top:0;z-index:2}
 .brand{display:flex;align-items:center;gap:9px;color:var(--ink);font-weight:600;letter-spacing:-.01em}
@@ -408,12 +399,12 @@ a:hover{text-decoration:underline}
 .topbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .live{display:inline-flex;align-items:center;gap:6px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
   color:var(--ink-2);padding:4px 9px;border-radius:999px;box-shadow:0 0 0 1px var(--line)}
-.live i{width:5px;height:5px;border-radius:50%;background:var(--accent-bright);animation:pulse 2.4s infinite}
+.live i{width:5px;height:5px;border-radius:50%;background:var(--green);animation:pulse 2.4s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .uptime-pill,.who{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);padding:4px 9px;
   border-radius:999px;box-shadow:0 0 0 1px var(--line);min-width:52px;display:inline-flex;align-items:center;gap:6px}
-.who{color:var(--accent-bright);box-shadow:0 0 0 1px rgba(46,160,67,.35)}
-.btn{display:inline-flex;align-items:center;font:inherit;font-size:13px;font-weight:600;color:#fff;
+.who{color:var(--accent-bright);box-shadow:0 0 0 1px var(--ring)}
+.btn{display:inline-flex;align-items:center;font:inherit;font-size:13px;font-weight:600;color:var(--ctp-crust);
   background:var(--accent);border:0;border-radius:var(--r-sm);padding:7px 14px;cursor:pointer;transition:.14s ease}
 .btn:hover{background:var(--accent-bright);text-decoration:none}
 .btn:active{transform:translateY(1px)}
@@ -424,9 +415,9 @@ main{max-width:1180px;margin:0 auto;padding:clamp(26px,4vw,44px) clamp(16px,4vw,
 
 /* hero */
 .hero{max-width:680px;margin-bottom:24px}
-.kicker{margin:0 0 10px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent-bright);font-weight:600}
+.kicker{margin:0 0 10px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:600}
 h1{margin:0 0 9px;font-size:clamp(26px,4.2vw,42px);line-height:1.08;letter-spacing:-.028em;font-weight:650}
-h1 .accent{color:var(--accent-bright)}
+h1 .accent{color:var(--accent)}
 .sub{margin:0;color:var(--ink-3);font-size:15px;max-width:56ch}
 
 /* stat strip */
@@ -437,7 +428,7 @@ h1 .accent{color:var(--accent-bright)}
 .stat{position:relative;padding:13px 15px 12px}
 .stat+.stat{box-shadow:inset 1px 0 0 var(--line)}
 .stat::before{content:"";position:absolute;top:0;left:0;right:0;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(46,160,67,.5),transparent);opacity:.55}
+  background:linear-gradient(90deg,transparent,var(--ring),transparent);opacity:.55}
 .stat-label{margin:0;font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
 .stat-value{margin:7px 0 1px;font-family:var(--mono);font-size:27px;line-height:1;font-variant-numeric:tabular-nums;
   letter-spacing:-.02em;transition:color .3s}
@@ -453,7 +444,7 @@ h1 .accent{color:var(--accent-bright)}
 .panel-head h2{margin:0;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);font-weight:700}
 .tag{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);border-radius:999px;padding:3px 8px;
   box-shadow:0 0 0 1px var(--line-soft);white-space:nowrap;display:inline-flex;align-items:center;gap:6px;min-height:20px}
-.tag.ok{color:var(--accent-bright);box-shadow:0 0 0 1px rgba(46,160,67,.35)}
+.tag.ok{color:var(--accent-bright);box-shadow:0 0 0 1px var(--ring)}
 
 /* leaderboard */
 .board{list-style:none;margin:0;padding:0}
@@ -461,7 +452,7 @@ h1 .accent{color:var(--accent-bright)}
   padding:7px 9px;border-radius:var(--r-sm);box-shadow:0 0 0 1px transparent}
 .board li+li{margin-top:2px}
 .board li:hover{background:var(--raised)}
-.board li.me{background:rgba(46,160,67,.09);box-shadow:0 0 0 1px rgba(46,160,67,.4)}
+.board li.me{background:var(--tint-2);box-shadow:0 0 0 1px var(--ring)}
 .rank{font-family:var(--mono);font-size:12px;color:var(--ink-3);text-align:right}
 .board li:nth-child(1) .rank{color:var(--gold);font-weight:700}
 .board li:nth-child(2) .rank{color:var(--bronze);font-weight:700}
@@ -489,7 +480,7 @@ h1 .accent{color:var(--accent-bright)}
 
 /* loading skeletons, so nothing ever shows a bare dash */
 .skel{display:inline-block;width:100%;height:11px;border-radius:3px;
-  background:linear-gradient(90deg,var(--raised),#2b3138,var(--raised));background-size:200% 100%;
+  background:linear-gradient(90deg,var(--raised),var(--ctp-surface1),var(--raised));background-size:200% 100%;
   animation:shimmer 1.5s linear infinite}
 .skel-sm{width:44px;height:9px}
 .skel-lg{width:52px;height:22px}
@@ -504,7 +495,7 @@ h1 .accent{color:var(--accent-bright)}
 
 /* opt-in switch */
 .optin{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px;
-  padding:10px 12px;border-radius:var(--r-sm);background:rgba(46,160,67,.07);box-shadow:0 0 0 1px rgba(46,160,67,.25)}
+  padding:10px 12px;border-radius:var(--r-sm);background:var(--tint);box-shadow:0 0 0 1px var(--ring)}
 .optin-text{display:flex;flex-direction:column}
 .optin-text b{font-size:13.5px;font-weight:600}
 .optin-text span{font-size:11.5px;color:var(--ink-3)}
@@ -512,7 +503,7 @@ h1 .accent{color:var(--accent-bright)}
   box-shadow:0 0 0 1px var(--line);cursor:pointer;transition:.18s;flex:none}
 .switch::after{content:"";position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;
   background:var(--ink-3);transition:.18s}
-.switch[aria-checked="true"]{background:rgba(46,160,67,.28);box-shadow:0 0 0 1px rgba(46,160,67,.6)}
+.switch[aria-checked="true"]{background:var(--tint-2);box-shadow:0 0 0 1px var(--ring-strong)}
 .switch[aria-checked="true"]::after{left:22px;background:var(--accent-bright)}
 
 /* kv list */
@@ -523,7 +514,7 @@ h1 .accent{color:var(--accent-bright)}
 .kv dd{margin:0;font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;text-align:right}
 .kv dd .placeholder{font-family:var(--sans);font-size:12px}
 .spark{display:flex;align-items:flex-end;gap:3px;height:40px;margin-top:13px}
-.spark i{flex:1;background:linear-gradient(180deg,rgba(46,160,67,.85),rgba(46,160,67,.16));border-radius:2px 2px 0 0;min-height:2px}
+.spark i{flex:1;background:linear-gradient(180deg,var(--bar-top),var(--bar-bottom));border-radius:2px 2px 0 0;min-height:2px}
 .spark-empty{margin-top:13px}
 
 /* channels */
@@ -537,16 +528,16 @@ h1 .accent{color:var(--accent-bright)}
   text-align:left;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .chan-open:hover{text-decoration:underline}
 .chan-open:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px;border-radius:3px}
-.dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--ink-3);box-shadow:0 0 0 2px rgba(139,148,158,.16)}
-.dot.on{background:var(--accent-bright);box-shadow:0 0 0 2px rgba(46,160,67,.2)}
+.dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--ink-3);box-shadow:0 0 0 2px var(--dot-halo)}
+.dot.on{background:var(--green);box-shadow:0 0 0 2px var(--ring)}
 .dot.paused{background:var(--gold)}
 
 /* channel popup */
 .modal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px}
 .modal.hidden{display:none}
-.modal-scrim{position:absolute;inset:0;background:rgba(1,4,9,.72);backdrop-filter:blur(2px)}
+.modal-scrim{position:absolute;inset:0;background:var(--scrim);backdrop-filter:blur(2px)}
 .modal-card{position:relative;width:min(560px,100%);max-height:86vh;overflow-y:auto;background:var(--surface);
-  border-radius:var(--r-lg);box-shadow:0 0 0 1px var(--line),0 24px 60px rgba(1,4,9,.6);padding:20px}
+  border-radius:var(--r-lg);box-shadow:0 0 0 1px var(--line),0 24px 60px var(--shadow);padding:20px}
 .cm-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}
 .cm-title{font-size:19px;font-weight:640;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;min-width:0}
 .cm-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -567,7 +558,7 @@ h1 .accent{color:var(--accent-bright)}
 .cm-who span{display:block;font-size:11.5px;color:var(--ink-3)}
 .cm-note{font-size:12.5px;color:var(--ink-3);margin-top:10px}
 .tag-cm{font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:2px 5px;border-radius:4px;
-  background:rgba(88,166,255,.16);color:var(--accent-bright);box-shadow:0 0 0 1px rgba(88,166,255,.28);flex:none}
+  background:var(--blue-tint);color:var(--accent-bright);box-shadow:0 0 0 1px var(--blue-ring);flex:none}
 
 /* activity log */
 .log{list-style:none;margin:0;padding:0;display:grid;gap:1px;background:var(--line-soft);
@@ -596,7 +587,7 @@ footer{display:flex;justify-content:space-between;align-items:center;gap:12px;fl
   font-size:13px;font-weight:600;color:var(--ink-3);background:none;border:0;border-bottom:2px solid transparent;
   cursor:pointer;text-decoration:none;margin-bottom:-1px;white-space:nowrap}
 .tab:hover{color:var(--ink);text-decoration:none;background:var(--surface)}
-.tab.on{color:var(--ink);border-bottom-color:var(--accent-bright)}
+.tab.on{color:var(--ink);border-bottom-color:var(--accent)}
 .tab .dot{width:5px;height:5px;border-radius:50%;background:var(--accent-bright);flex:0 0 auto}
 
 /* explainer modal */
@@ -632,12 +623,12 @@ footer{display:flex;justify-content:space-between;align-items:center;gap:12px;fl
 .switch i{position:absolute;inset:0;background:var(--line);border-radius:999px;transition:background .15s;
   pointer-events:none}
 .switch i::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
-  background:#fff;transition:transform .15s}
+  background:var(--knob);transition:transform .15s}
 .switch input:checked+i{background:var(--accent)}
 .switch input:checked+i::after{transform:translateX(16px)}
-.switch input:focus-visible+i{box-shadow:0 0 0 3px rgba(46,160,67,.35)}
+.switch input:focus-visible+i{box-shadow:0 0 0 3px var(--ring)}
 .row-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:4px}
-.saved{font-size:12px;color:var(--accent-bright);opacity:0;transition:opacity .2s}
+.saved{font-size:12px;color:var(--green);opacity:0;transition:opacity .2s}
 .saved.on{opacity:1}
 .cardlist{display:grid;gap:10px}
 .cardrow{background:var(--raised);border-radius:var(--r-sm);padding:13px}
@@ -657,8 +648,8 @@ footer{display:flex;justify-content:space-between;align-items:center;gap:12px;fl
 .kvlist>div{display:flex;justify-content:space-between;gap:14px;background:var(--raised);padding:10px 13px;font-size:13px}
 .kvlist dt,.kvlist .k{color:var(--ink-3)}
 .kvlist .v{font-family:var(--mono);font-size:12.5px;text-align:right;word-break:break-word}
-.warnrow{display:flex;gap:9px;align-items:flex-start;background:rgba(248,81,73,.08);
-  box-shadow:0 0 0 1px rgba(248,81,73,.25);border-radius:var(--r-sm);padding:11px 13px;
+.warnrow{display:flex;gap:9px;align-items:flex-start;background:var(--red-tint);
+  box-shadow:0 0 0 1px var(--red-ring);border-radius:var(--r-sm);padding:11px 13px;
   font-size:12.5px;color:var(--ink-2);line-height:1.5}
 .warnrow b{color:var(--ink)}
 .warnrow .ic{color:var(--red);flex:0 0 auto;font-weight:700}
@@ -904,7 +895,7 @@ function renderChannels(channels, botCount){
   // Kept so the popup can read the same numbers without another round trip.
   channelData = channels || [];
   if (!channelData.length){
-    list.innerHTML = '<li class="none-slot">' + none('No channels yet', 'Add Asteria to a channel and it shows up here.') + '</li>';
+    list.innerHTML = '<li class="none-slot">' + none('No channels yet', 'Add Orbit to a channel and it shows up here.') + '</li>';
     return;
   }
   list.innerHTML = channelData.map((channel) => {
@@ -1047,7 +1038,7 @@ async function refresh(){
   if (first) {
     const bare = !h.total && !h.members && !data.botChannels.count;
     if (bare) {
-      cold('Nothing here yet', 'Asteria has not seen a huddle, a person, or a channel. Invite it to a channel and this page fills itself in.');
+      cold('Nothing here yet', 'Orbit has not seen a huddle, a person, or a channel. Invite it to a channel and this page fills itself in.');
     }
     first = false;
   }
@@ -1405,5 +1396,3 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
-
-export const DASHBOARD_ACCENT = ACCENT;

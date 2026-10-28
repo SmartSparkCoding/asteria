@@ -1,5 +1,5 @@
 [Unit]
-Description=Asteria status RSS server
+Description=Jacob's Orbit status RSS server
 After=network-online.target
 Wants=network-online.target
 

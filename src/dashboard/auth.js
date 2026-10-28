@@ -41,8 +41,27 @@ export function createDashboardAuth({ client, store, logger = console, slackClie
    * Slack "Sign in with Slack" (OIDC user token). Needs the app's client id and
    * secret plus the redirect url registered on the app.
    */
+  /**
+   * The origin the person is actually on, for the OAuth hop only.
+   *
+   * PUBLIC_URL is the canonical address and is what DMs and links use, but the
+   * redirect has to stay on the host the browser is on: during a rename both the
+   * old and new host are registered Slack redirect URLs, and sending someone to
+   * the other one loses their session cookie and looks like a failed sign in.
+   */
+  function requestBaseUrl(req) {
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
+      .split(',')[0]
+      .trim();
+    const proto = forwardedProto || (req.socket.encrypted ? 'https' : 'http');
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '')
+      .split(',')[0]
+      .trim();
+    return host ? `${proto}://${host}` : publicUrl(req);
+  }
+
   function slackAuthorizeUrl(req, state, nonce) {
-    const redirectUri = `${publicUrl(req)}/auth/slack/callback`;
+    const redirectUri = `${requestBaseUrl(req)}/auth/slack/callback`;
     const params = new URLSearchParams({
       client_id: slackClientId,
       scope: 'openid profile',
@@ -72,7 +91,9 @@ export function createDashboardAuth({ client, store, logger = console, slackClie
   }
 
   async function exchangeSlackCode(req, code, expectedNonce) {
-    const redirectUri = `${publicUrl(req)}/auth/slack/callback`;
+    // Must match the authorize request byte for byte, so it uses the same
+    // host-relative base rather than the canonical PUBLIC_URL.
+    const redirectUri = `${requestBaseUrl(req)}/auth/slack/callback`;
     // Slack's token endpoint wants a form encoded body with an explicit grant type.
     // Sending JSON without it came back as `invalid_code` on a code that was fine.
     const response = await fetch('https://slack.com/api/openid.connect.token', {
@@ -151,7 +172,7 @@ export function createDashboardAuth({ client, store, logger = console, slackClie
         )
       ) {
         throw new UserFacingError(
-          'I could not open a DM with you on Slack. Open Slack, start a chat with the Asteria bot and send anything, then try this again.',
+          'I could not open a DM with you on Slack. Open Slack, start a chat with the Orbit bot and send anything, then try this again.',
         );
       }
       throw error;
@@ -159,13 +180,13 @@ export function createDashboardAuth({ client, store, logger = console, slackClie
     try {
       await client.chat.postMessage({
         channel: channelId,
-        text: `Your Asteria dashboard sign-in code is *${code}*. It expires in 10 minutes. If this wasn't you, ignore this message.`,
+        text: `Your Orbit sign-in code is *${code}*. It expires in 10 minutes. If this wasn't you, ignore this message.`,
       });
     } catch (error) {
       codes.delete(slackUserId);
       if (/^(channel_not_found|not_in_channel|channel_not_found)$/.test(error?.data?.error || '')) {
         throw new UserFacingError(
-          'Your DM went through but I could not post to it. Check that the Asteria bot is not blocked.',
+          'Your DM went through but I could not post to it. Check that the Orbit bot is not blocked.',
         );
       }
       throw error;
