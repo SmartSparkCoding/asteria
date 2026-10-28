@@ -1027,7 +1027,11 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
       return;
     }
     const userId = body?.user?.id || '';
-    const ts = body?.message?.thread_ts || body?.message?.ts;
+    // The message the button is attached to, never `thread_ts`: the prompt is
+    // itself a reply in the huddle thread, so thread_ts names the parent, which
+    // is usually the starter's message. Editing that answered cant_update_message
+    // and left the button doing nothing.
+    const ts = body?.message?.ts;
     const channelId = body?.container?.channel_id ?? body?.channel?.id;
     const huddle = store.getHuddle(callId);
     const rules = channelRules(huddle?.channel_id || channelId || '');

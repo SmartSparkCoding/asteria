@@ -1184,7 +1184,9 @@ describe('App Home categories and huddle channel controls', () => {
   });
 
   it('only shows a channel owner the channels they own', async () => {
-    const { store, handlers, client } = await createHarness();
+    const { store, handlers, client } = await createHarness({
+      botChannelIds: ['Cmine', 'Ctheirs', 'Cunconfigured'],
+    });
     store.upsertHuddleChannel({ channelId: 'Cmine', ownerIds: ['UOTHER'] });
     store.upsertHuddleChannel({ channelId: 'Ctheirs', ownerIds: ['USOMEONE'] });
     store.upsertHuddle({ callId: 'R1', channelId: 'Cunconfigured', startedAt: 1000 });
@@ -1207,7 +1209,9 @@ describe('App Home categories and huddle channel controls', () => {
 
     await handlers.publishTab(client, 'UOWNER', 'huddles', 'huddle-channels');
     const view = client.views.publish.mock.calls.at(-1).arguments[0].view;
-    const actionIds = view.blocks.flatMap((block) => (block.elements || []).map((element) => element.action_id));
+    const actionIds = view.blocks
+      .flatMap((block) => (block.elements || []).map((element) => element.action_id))
+      .filter(Boolean);
     assert(actionIds.includes('huddle_channel_configure_Crandom'));
     assert(actionIds.includes('huddle_channel_toggle_tracking_Crandom'));
     assert(actionIds.includes('huddle_channel_toggle_auto_replies_Crandom'));

@@ -680,10 +680,7 @@ describe('huddle tracker integration', () => {
 
     const started = textsPosted(client).find((text) => text.includes('Huddle started'));
     assert.ok(started, 'the start notice went out');
-    assert(
-      started.includes('https://asteria.test/Rlink'),
-      'and it links to the huddle page, not to some guessed host',
-    );
+    assert(started.includes('https://asteria.test/Rlink'), 'and it links to the huddle page, not to some guessed host');
 
     await handlers.message({
       message: {
@@ -1510,7 +1507,9 @@ describe('huddle tracker integration', () => {
       body: {
         user: { id: 'UOWNER' },
         actions: [{ value: 'Ropt' }],
-        message: { ts: '172000.000000', thread_ts: '172000.000000' },
+        // The prompt is a reply, so thread_ts is the parent and ts is the message
+        // that actually carries the button. The edit must target the latter.
+        message: { ts: '172000.555555', thread_ts: '172000.000000' },
         container: { channel_id: 'Crandom' },
         channel: { id: 'Crandom' },
       },
@@ -1522,7 +1521,7 @@ describe('huddle tracker integration', () => {
     assert.equal(client.chat.postMessage.mock.callCount(), 0, 'confirmation replaces the button message');
     const confirmation = client.chat.update.mock.calls[0];
     assert(confirmation, 'confirmation sent via chat.update');
-    assert.equal(confirmation.arguments[0].ts, '172000.000000');
+    assert.equal(confirmation.arguments[0].ts, '172000.555555', 'edits the button message, not the thread parent');
     assert(confirmation.arguments[0].text.includes('thanks <@UOWNER>'), 'thanks the clicker by name');
     assert(confirmation.arguments[0].text.includes('tracking again'));
     assert(

@@ -1162,9 +1162,10 @@ function buildHuddleChannelBlocks(channel, now) {
   ];
 }
 
-export function buildHuddleChannelsView({ channels, notice, navigation, canConfigureAll = false }) {
+export function buildHuddleChannelsView({ channels, available = [], notice, navigation, canConfigureAll = false }) {
   const now = Math.floor(Date.now() / 1000);
   const visible = (channels || []).slice(0, 25);
+  const loose = (available || []).slice(0, 20);
 
   return {
     type: 'home',
@@ -1201,6 +1202,29 @@ export function buildHuddleChannelsView({ channels, notice, navigation, canConfi
                 {
                   type: 'mrkdwn',
                   text: `_showing the first ${visible.length} of ${channels.length} channels_`,
+                },
+              ],
+            },
+          ]
+        : []),
+      ...(loose.length > 0
+        ? [
+            { type: 'divider' },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text:
+                  "*I'm in these channels but have no settings for them yet:* " +
+                  loose.map((c) => `<#${c.channelId}>`).join(', '),
+              },
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: 'They still track with the defaults. Track one to give it a card on the dashboard, which shows the same list as this screen.',
                 },
               ],
             },
@@ -1309,6 +1333,7 @@ export function buildHomeView({
   syncSettings,
   huddles,
   huddleChannels,
+  availableChannels,
   leaderboard,
   logs,
   baseUrl = '',
@@ -1337,6 +1362,7 @@ export function buildHomeView({
       }
       return buildHuddleChannelsView({
         channels: huddleChannels || [],
+        available: availableChannels || [],
         notice,
         navigation,
         canConfigureAll: isOwner,

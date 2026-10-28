@@ -1,4 +1,5 @@
 import { createHomeAssistantService } from '../services/home-assistant.js';
+import { describeHuddleChannels } from '../huddles/channels.js';
 import {
   addUserToUserGroup,
   fetchUserGroups,
@@ -114,23 +115,14 @@ export function createHomeHandlers({
     return { ids, verified: ids.length > 0 };
   }
 
-  function visibleHuddleChannels(userId) {
-    const now = Math.floor(Date.now() / 1000);
-    return store
-      .listTrackedHuddleChannels()
-      .filter((channel) => isOwner(userId) || (channel.owner_ids || []).includes(userId))
-      .map((channel) => ({
-        channelId: channel.channel_id,
-        name: channel.name || '',
-        enabled: !!channel.enabled,
-        autoReplies: !!channel.auto_replies,
-        restrictTriggers: !!channel.restrict_triggers,
-        condensed: !!channel.condensed_review,
-        ownerIds: channel.owner_ids || [],
-        pausedUntil: channel.paused_until || 0,
-        paused: (channel.paused_until || 0) > now,
-        configured: channel.configured,
-      }));
+  /**
+   * The channels this person can configure, from the same builder the dashboard
+   * uses. Keeping one source means App Home and /huddles cannot disagree about
+   * which channels exist or what their switches are set to.
+   */
+  async function visibleHuddleChannels(userId) {
+    const { channels, available } = await describeHuddleChannels({ store, botChannels, userId });
+    return { channels, available };
   }
 
   async function publishTab(client, userId, category, sub, notice = '') {
@@ -172,7 +164,8 @@ export function createHomeHandlers({
       !scope.verified && !notice && (sub === 'leaderboard' || sub === 'logs')
         ? "I couldn't check which channels I'm in, so this is empty for now. Try again in a moment."
         : notice;
-    const huddleChannels = isOwnerUser || isChannelOwnerUser ? visibleHuddleChannels(userId) : [];
+    const { channels: huddleChannels, available: availableChannels } =
+      isOwnerUser || isChannelOwnerUser ? await visibleHuddleChannels(userId) : { channels: [], available: [] };
 
     await publishHome(
       client,
@@ -188,6 +181,7 @@ export function createHomeHandlers({
         notice: scopeNotice,
         huddles,
         huddleChannels,
+        availableChannels,
         leaderboard,
         logs,
         isOwner: isOwnerUser,
