@@ -77,8 +77,9 @@ describe('rebuilding historical huddle award breakdowns', () => {
     // If the fallback to first_seen/last_seen were still in play, each person
     // would score 10m or 5m. The intervals only prove one minute each.
     for (const award of awards) {
-      const attendance = award.reasons.find((reason) => /^\d+m$/.test(reason));
-      assert.equal(attendance, '1m', `${award.userId} is scored on the minute actually proven`);
+      const attendance = award.reasons.find((reason) => reason.kind === 'minutes');
+      assert.equal(attendance?.label, '1m in the call', `${award.userId} is scored on the minute actually proven`);
+      assert.equal(attendance?.points, 1, `${award.userId} is worth that one minute`);
     }
     store.close();
   });
@@ -91,7 +92,10 @@ describe('rebuilding historical huddle award breakdowns', () => {
     // The page banner keys off this exact string, so a typo here silently
     // drops the explanation of where the number came from.
     for (const award of store.listHuddleAwards('Rback')) {
-      assert(award.reasons.includes('backfilled'), `${award.user_id} carries the marker`);
+      assert(
+        award.reasons.some((reason) => reason.label === 'backfilled'),
+        `${award.user_id} carries the marker`,
+      );
     }
     store.close();
   });

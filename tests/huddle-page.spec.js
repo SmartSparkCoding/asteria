@@ -110,6 +110,8 @@ describe('huddle pages', () => {
       assert(html.includes('orbit &middot; huddle') || html.includes('orbit · huddle'), 'renders the page');
       assert(html.includes(`name-${IN_THE_HUDDLE}`), 'names the person who was there');
       assert(html.includes('10m in the call'), 'shows why they scored');
+      assert(html.includes('<b>+10</b>'), 'and what the minutes were worth');
+      assert(html.includes('<b>+5</b>'), 'and the rank bonus, separately');
     }
   });
 

@@ -1033,7 +1033,7 @@ export function buildLeaderboardView({ leaderboard, notice, navigation }) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: 'Huddle points: stay in huddles, beat the longest/shortest message prizes, and start huddles to climb the board.',
+          text: 'Huddle points: 1 a minute for the time you are actually in the call, 5 for opening a huddle, and the top three by time get 5, 3 and 1.',
         },
       },
       ...(ranked.length > 0

@@ -135,7 +135,7 @@ describe('attendance intervals', () => {
 
     assert.equal(good.points, 10 * 1 + 5, '10 minutes plus the rank bonus');
     assert.equal(open.points, 2, 'only the 2 provable minutes, no rank bonus');
-    assert.equal(open.reasons.includes('rank 1'), false, 'a partial record cannot take first place');
+    assert.equal(open.reasons.some((reason) => reason.kind === 'rank'), false, 'a partial record cannot take first place');
     assert.equal(stats.attendancePartial, true);
   });
 
@@ -165,7 +165,7 @@ describe('attendance intervals', () => {
       attendance: { participants, partial },
     });
     assert.equal(awards.get('U0REAL').points, 1, '58 seconds is one minute of points, not 182');
-    assert.equal(awards.get('U0REAL').reasons.includes('rank 1'), false, 'and no rank bonus');
+    assert.equal(awards.get('U0REAL').reasons.some((reason) => reason.kind === 'rank'), false, 'and no rank bonus');
   });
 
   it('falls back to the old span for huddles recorded before intervals, marked partial', () => {

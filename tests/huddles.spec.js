@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, it, mock } from 'node:test';
 import { buildHuddlesView } from '../src/app-home/views.js';
 import { createStore } from '../src/database/store.js';
-import { computeHuddlePoints } from '../src/huddles/points.js';
+import { awardItems, computeHuddlePoints } from '../src/huddles/points.js';
 import {
   computeHuddleStats,
   extractMessageText,
@@ -2164,7 +2164,38 @@ describe('huddle tracker integration', () => {
     assert.equal(awards.get('U1').points, 5 + 5 + 5, '5m + rank 1 + starter');
     assert.equal(awards.get('U2').points, 4 + 3 + 10, '4m + rank 2 + longest message');
     assert.equal(awards.get('U3').points, 2 + 1 + 10, '2m + rank 3 + shortest message');
-    assert(awards.get('U1').reasons.includes('started the huddle'));
+    assert(
+      awards.get('U1').reasons.some((reason) => reason.kind === 'starter' && reason.label === 'started the huddle'),
+      'the starter award says what it was',
+    );
+    assert.deepEqual(
+      awards.get('U2').reasons.map((reason) => [reason.kind, reason.points]),
+      [
+        ['minutes', 4],
+        ['rank', 3],
+        ['message', 10],
+      ],
+      'every reason carries the points it was worth, in the order they were earned',
+    );
+  });
+
+  it('rebuilds the breakdown for awards stored before it existed', () => {
+    // Awards used to be bare strings, and their individual value was never
+    // stored. The rules behind them have not changed, so they can be rebuilt
+    // exactly rather than shown as an unexplained total.
+    assert.deepEqual(awardItems(['12m', 'rank 2', 'longest message', 'started the huddle', 'backfilled']), [
+      { kind: 'minutes', label: '12m in the call', points: 12 },
+      { kind: 'rank', label: 'rank 2', points: 3 },
+      { kind: 'message', label: 'longest message', points: 10 },
+      { kind: 'starter', label: 'started the huddle', points: 5 },
+      { kind: 'other', label: 'backfilled', points: 0 },
+    ]);
+    assert.deepEqual(awardItems(null), [], 'a missing breakdown is empty, not a crash');
+    assert.deepEqual(
+      awardItems([{ kind: 'target', label: 'most messages', points: 15 }]),
+      [{ kind: 'target', label: 'most messages', points: 15 }],
+      'stored items pass through untouched',
+    );
   });
 
   it('withholds rank bonuses when attendance is only a legacy span', () => {

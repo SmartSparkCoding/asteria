@@ -151,6 +151,11 @@ td.act{text-align:right;white-space:nowrap}
 .lead .n{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lead .p{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
 .lead li.me{background:rgba(203,166,247,.07)}
+.mine{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.mine .label{margin-bottom:6px}
+.mine-list{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.mine-list li{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--ink-2)}
+.mine-list li .mono{color:var(--ink)}
 
 /* the one question */
 .agree-wrap{margin-bottom:18px}
@@ -516,6 +521,7 @@ const VIEWS = {
       <div class="panel">
         <div id="optin-slot"></div>
         <ol class="lead" id="board"><li><span class="skel" style="width:100%"></span></li></ol>
+        <div class="mine hidden" id="my-points"></div>
       </div>
     </aside>
   </div>
@@ -844,6 +850,21 @@ async function initAgreement(){
   api('/api/me/agreement').then(render).catch(function () {});
 }
 
+async function initMyPoints(){
+  const slot = $('my-points');
+  if (!slot) return;
+  const data = await api('/api/me/points');
+  if (!data.items || !data.items.length) return;
+  slot.classList.remove('hidden');
+  slot.innerHTML =
+    '<p class="label">Your ' + num.format(data.total) + ' points</p>' +
+    '<ul class="mine-list">' +
+      data.items.map(function (item) {
+        return '<li><span>' + esc(item.label) + '</span><span class="mono">' + num.format(item.points) + '</span></li>';
+      }).join('') +
+    '</ul>';
+}
+
 async function initDashboard(){
   const set = function (id, text) { const el = $(id); if (el) el.textContent = text; };
 
@@ -1146,7 +1167,7 @@ async function initJLog(){
   });
 }
 
-if (view === 'dashboard') { initAgreement(); initDashboard(); }
+if (view === 'dashboard') { initAgreement(); initMyPoints().catch(function () {}); initDashboard(); }
 else if (view === 'huddles') initHuddles().catch(function () {});
 else if (view === 'channels') initChannels().catch(function () {});
 else if (view === 'recaps') initRecaps().catch(function () {});

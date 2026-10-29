@@ -2258,6 +2258,27 @@ export async function createStore(databasePath, options = {}) {
       return rows.length;
     },
 
+    /**
+     * Every award a person has, for the "where your points come from" view.
+     *
+     * Only the reasons are selected: the totals are already on the leaderboard,
+     * and this answers a different question, which is what the total is made of.
+     */
+    listUserAwardReasons(userId) {
+      return bindAndFetchAll(
+        database,
+        'SELECT reasons FROM huddle_awards WHERE user_id = $id',
+        { $id: String(userId || '') },
+      ).map((row) => {
+        try {
+          const parsed = JSON.parse(row.reasons || '[]');
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      });
+    },
+
     /** The per-person points breakdown for one huddle, biggest first. */
     listHuddleAwards(callId) {
       return bindAndFetchAll(

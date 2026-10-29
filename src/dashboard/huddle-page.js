@@ -9,6 +9,7 @@
  * either.
  */
 
+import { awardItems } from '../huddles/points.js';
 import { ORBIT_FAVICON, ORBIT_MARK_SVG, THEME_TOKENS } from './theme.js';
 
 const STYLES = `
@@ -81,6 +82,7 @@ td.num,th.num{text-align:right;font-family:var(--mono);font-size:13px;white-spac
 .reasons{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
 .reason{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);background:var(--raised);
   border-radius:999px;padding:2px 7px;box-shadow:0 0 0 1px var(--line)}
+.reason b{color:var(--accent-bright);font-weight:600;margin-left:4px}
 .empty{background:var(--surface);border-radius:var(--r);padding:20px 16px;box-shadow:0 0 0 1px var(--line);
   color:var(--ink-3);font-size:13.5px}
 .note{font-size:12.5px;color:var(--ink-3);background:var(--surface);border-radius:var(--r);padding:12px 14px;
@@ -114,17 +116,22 @@ export function formatHuddleLength(seconds) {
   return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
-function reasonLabel(reason) {
-  // Written by computeHuddlePoints: "12m" attendance, "rank 1", "longest
-  // message", "shortest message", "started the huddle".
-  if (/^\d+m$/.test(reason)) {
-    return `${reason} in the call`;
-  }
-  if (reason === 'backfilled') {
-    // Not a per person award, a marker saying where the whole table came from.
-    return 'rebuilt from recorded attendance';
-  }
-  return reason;
+/**
+ * The chips under a name, each carrying what it was worth.
+ *
+ * `awardItems` also understands the bare strings older awards were stored as,
+ * so a huddle from before the breakdown existed still shows its reasons, with
+ * the values rebuilt from the rules that produced them.
+ */
+function reasonChips(reasons) {
+  return awardItems(reasons)
+    .map((item) => {
+      const label = item.label === 'backfilled' ? 'rebuilt from recorded attendance' : item.label;
+      return `<span class="reason">${escapeHtml(label)}${
+        item.points ? `<b>+${item.points}</b>` : ''
+      }</span>`;
+    })
+    .join('');
 }
 
 function personCell(name, avatarUrl) {
@@ -211,9 +218,7 @@ export function renderHuddlePage(view) {
             : index === 2
               ? 'var(--silver)'
               : 'var(--ink-3)';
-      const reasons = (participant.reasons || [])
-        .map((reason) => `<span class="reason">${escapeHtml(reasonLabel(reason))}</span>`)
-        .join('');
+      const reasons = reasonChips(participant.reasons || []);
       return `<tr${participant.longest ? ' class="longest"' : ''}>
 <td class="rank" style="color:${medal}">${index + 1}</td>
 <td>${personCell(participant.name, participant.avatarUrl)}${reasons ? `<div class="reasons">${reasons}</div>` : ''}${

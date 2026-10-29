@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { DateTime } from 'luxon';
 import { describeHuddleChannels } from '../huddles/channels.js';
 import { createPermissions, isSlackUserId, parseOwnerIds } from '../permissions.js';
+import { awardItems, POINT_RULES } from '../huddles/points.js';
 import { buildStatusRss, readStatusEvents } from '../status/status-core.js';
 import { createDashboardAuth } from './auth.js';
 import { RECAP_AGREEMENT, RECAP_AGREEMENT_VERSION } from './agreement.js';
@@ -484,7 +485,10 @@ people who were in the huddle.</p></div></body></html>`;
           : '',
       durationSeconds: isLive ? Math.max(0, Math.floor(Date.now() / 1000) - (huddle.started_at || 0)) : durationSeconds,
       isLive,
-      reconstructed: awards.some((award) => award.reasons.some((reason) => reason === 'backfilled')),
+      // Older rows carry the marker as a bare string, newer ones as an item.
+      reconstructed: awards.some((award) =>
+        award.reasons.some((reason) => reason === 'backfilled' || reason?.label === 'backfilled'),
+      ),
       // Some attendance could not be proven, so the page says so rather than
       // presenting a partial record as if it were complete.
       attendancePartial: attendance.partial || participants.every((participant) => participant.partial),
@@ -995,6 +999,35 @@ people who were in the huddle.</p></div></body></html>`;
           isLive: huddle.status === 'active' && !huddle.endedAt,
           url: `/${huddle.callId}`,
         })),
+      });
+      return;
+    }
+
+    if (route === '/api/me/points' && method === 'GET') {
+      if (!auth_) {
+        sendJson(res, 401, { error: 'Sign in first.' });
+        return;
+      }
+      const totals = new Map();
+      for (const reasons of store.listUserAwardReasons(auth_.session.slack_user_id)) {
+        for (const item of awardItems(reasons)) {
+          const entry = totals.get(item.kind) ?? { kind: item.kind, points: 0, count: 0 };
+          entry.points += item.points;
+          entry.count += 1;
+          totals.set(item.kind, entry);
+        }
+      }
+      const items = [...totals.values()]
+        .filter((entry) => entry.points !== 0)
+        .sort((a, b) => b.points - a.points)
+        .map((entry) => ({
+          ...entry,
+          label: POINT_RULES.find((rule) => rule.kind === entry.kind)?.label || 'Something else',
+        }));
+      sendJson(res, 200, {
+        total: items.reduce((sum, entry) => sum + entry.points, 0),
+        items,
+        rules: POINT_RULES,
       });
       return;
     }

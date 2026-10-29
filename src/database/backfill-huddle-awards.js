@@ -82,7 +82,7 @@ export function backfillHuddleAwards({ store, logger = console, batchLogEvery = 
     // has to be written here or the page shows a total with no explanation of
     // where the number came from.
     for (const entry of awards.values()) {
-      entry.reasons.push('backfilled');
+      entry.reasons.push({ kind: 'marker', label: 'backfilled', points: 0 });
     }
     store.saveHuddleAwards(callId, huddle.channel_id || '', awards);
     result.reconstructed += 1;

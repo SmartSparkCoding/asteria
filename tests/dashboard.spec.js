@@ -308,6 +308,53 @@ describe('dashboard server', () => {
     }
   });
 
+  it('breaks a person\'s points down by where they came from', async () => {
+    const store = await createTestStore();
+    const harness = await startDashboard({ store });
+    try {
+      const anon = await fetch(`${harness.base}/api/me/points`);
+      assert.equal(anon.status, 401, 'the breakdown is not public either');
+
+      const user = await signIn(harness, { slackUserId: 'U0PLAIN01' });
+      store.saveHuddleAwards(
+        'Rbreak01',
+        'Cbot',
+        new Map([
+          [
+            'U0PLAIN01',
+            {
+              points: 40,
+              reasons: [
+                { kind: 'minutes', label: '30m in the call', points: 30 },
+                { kind: 'rank', label: 'rank 1', points: 5 },
+                { kind: 'starter', label: 'started the huddle', points: 5 },
+              ],
+            },
+          ],
+        ]),
+      );
+      // One row from before the breakdown existed, stored as bare strings.
+      store.saveHuddleAwards('Rbreak02', 'Cbot', new Map([['U0PLAIN01', { points: 12, reasons: ['12m'] }]]));
+
+      const data = await (await fetch(`${harness.base}/api/me/points`, { headers: { cookie: user.cookie } })).json();
+      assert.equal(data.total, 52);
+      const byKind = Object.fromEntries(data.items.map((item) => [item.kind, item]));
+      assert.equal(byKind.minutes.points, 42, 'the old bare "12m" row still counts as minutes');
+      assert.equal(byKind.minutes.count, 2, 'two awards make up that total');
+      assert.equal(byKind.rank.points, 5);
+      assert.equal(byKind.starter.points, 5);
+      assert.equal(data.items[0].kind, 'minutes', 'biggest first');
+      assert.equal(data.rules.length, 4, 'the rules ship with the numbers the page prints');
+
+      const other = await signIn(harness, { slackUserId: 'U0PLAIN02' });
+      const empty = await (await fetch(`${harness.base}/api/me/points`, { headers: { cookie: other.cookie } })).json();
+      assert.deepEqual(empty.items, [], 'somebody with no awards gets an empty breakdown, not a borrowed one');
+      assert.equal(empty.total, 0);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it('asks the recap agreement once per person and keeps the answer', async () => {
     const store = await createTestStore();
     const harness = await startDashboard({ store });
@@ -829,6 +876,12 @@ describe('the rebuilt site', () => {
     const html = renderApp({ signedIn: true, role: 'owner', view: 'dashboard' });
     assert.match(html, /id="recent-body"[^>]*>[^<]*<tr><td[^>]*><span class="skel"/);
     assert.match(html, /id="board"[^>]*><li><span class="skel"/);
+  });
+
+  it('shows the viewer where their own points came from', () => {
+    const html = renderApp({ signedIn: true, role: 'owner', view: 'dashboard' });
+    assert.match(html, /id="my-points"/);
+    assert.match(html, /\/api\/me\/points/);
   });
 
   it('has one place on the dashboard for the agreement', () => {
