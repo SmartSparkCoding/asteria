@@ -2640,6 +2640,58 @@ export async function createStore(databasePath, options = {}) {
       );
     },
 
+    /** Just the people still inside a huddle, read from the intervals themselves. */
+    listOpenHuddleAttendance(callId) {
+      return bindAndFetchAll(
+        database,
+        'SELECT user_id, joined_at FROM huddle_attendance WHERE call_id = $call_id AND left_at IS NULL ORDER BY joined_at',
+        { $call_id: String(callId || '') },
+      );
+    },
+
+    /**
+     * Move `last_seen_at` forward for everyone Slack still shows in a huddle.
+     *
+     * This runs on every roster read, so it is one statement and one write for
+     * the whole huddle rather than a row each: `persist` serialises the entire
+     * database to disk, and a poll loop that wrote per person would spend most
+     * of its time doing that.
+     *
+     * `last_seen_at` has to keep moving because it is the last moment somebody
+     * was actually *observed* inside. When a leave event goes missing, that
+     * timestamp is the only provable end for their interval, so a stale one
+     * would throw away attendance we did witness.
+     */
+    touchHuddleMembers(callId, userIds, at) {
+      const ids = (Array.isArray(userIds) ? userIds : []).filter(Boolean);
+      if (ids.length === 0) {
+        return 0;
+      }
+      const placeholders = ids.map((_, index) => `$user_${index}`).join(', ');
+      const params = {
+        $call_id: String(callId || ''),
+        $at: Math.floor(Number(at) || 0),
+      };
+      ids.forEach((userId, index) => {
+        params[`$user_${index}`] = userId;
+      });
+      const result = bindAndRun(
+        database,
+        `
+        UPDATE huddle_members SET
+          last_seen_at = CASE
+            WHEN huddle_members.last_seen_at IS NULL OR huddle_members.last_seen_at < $at THEN $at
+            ELSE huddle_members.last_seen_at
+          END,
+          is_in = 1
+        WHERE call_id = $call_id AND user_id IN (${placeholders})
+      `,
+        params,
+      );
+      persist();
+      return result?.changes ?? 0;
+    },
+
     /** Did anybody leave a join open? If so, some attendance is unprovable. */
     countOpenHuddleAttendance(callId) {
       const row = bindAndFetchOne(
