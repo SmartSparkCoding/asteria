@@ -280,7 +280,7 @@ export function createHuddleTracker({
       } catch (error) {
         if (attempt === 0) {
           await new Promise((resolve) => {
-            setTimeout(resolve, MEMBERSHIP_RETRY_MS).unref?.();
+            setTimeout(resolve, MEMBERSHIP_RETRY_MS);
           });
           continue;
         }
@@ -1028,7 +1028,7 @@ export function createHuddleTracker({
     for (const channelId of (channelIds ?? []).slice(0, BACKFILL_CHANNEL_LIMIT)) {
       await backfillChannelHuddles(channelId);
       await new Promise((resolve) => {
-        setTimeout(resolve, BACKFILL_CHANNEL_SPACING_MS).unref?.();
+        setTimeout(resolve, BACKFILL_CHANNEL_SPACING_MS);
       });
     }
   }
