@@ -2017,7 +2017,7 @@ describe('huddle tracker integration', () => {
     assert.match(posted.text, /2 people, 1 in now/, 'condensed headcount');
     assert.match(posted.text, /1h 0m|60m|1h/, 'the live length');
     assert.match(posted.text, /points are scored when it ends/);
-    assert.match(posted.text, new RegExp(`https://asteria.test/Rstats`), 'a link to the huddle page');
+    assert.match(posted.text, /https:\/\/asteria.test\/Rstats/, 'a link to the huddle page');
     tracker.stop();
   });
 

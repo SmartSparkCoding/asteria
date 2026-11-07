@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { resolvePermissions } from '../src/dashboard/permissions.js';
 import { createDashboardServer } from '../src/dashboard/server.js';
 import { createStore } from '../src/database/store.js';
-import { resolvePermissions } from '../src/dashboard/permissions.js';
 
 const OWNER = 'U0OWNER001';
 const HUDDLER = 'U0HUDDLER1';

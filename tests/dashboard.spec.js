@@ -5,10 +5,10 @@ import path from 'node:path';
 import { afterEach, describe, it, mock } from 'node:test';
 import { createDashboardAuth } from '../src/dashboard/auth.js';
 import { cachetAvatarUrl, cachetUserUrl, createCachetDirectory } from '../src/dashboard/cachet.js';
-import { renderApp, renderLanding } from '../src/dashboard/site.js';
 import { renderDashboardHtml } from '../src/dashboard/html.js';
 import { ROLES, resolvePermissions } from '../src/dashboard/permissions.js';
 import { createDashboardServer } from '../src/dashboard/server.js';
+import { renderApp, renderLanding } from '../src/dashboard/site.js';
 import { buildDashboardStats } from '../src/dashboard/stats.js';
 import { backfillChannelPoints } from '../src/database/backfill-channel-points.js';
 import { createStore } from '../src/database/store.js';
@@ -257,7 +257,9 @@ describe('dashboard server', () => {
       const user = await signIn(harness, { slackUserId: 'U0PLAIN01' });
 
       // Everyone signed in sees who scored, subject to each person's opt-out.
-      const signedInView = await (await fetch(`${harness.base}/api/stats`, { headers: { cookie: user.cookie } })).json();
+      const signedInView = await (
+        await fetch(`${harness.base}/api/stats`, { headers: { cookie: user.cookie } })
+      ).json();
       assert.deepEqual(
         signedInView.leaderboard.map((row) => row.userId).sort(),
         ['U0AEYDUCLKF', 'U0PLAIN01'],
@@ -308,7 +310,7 @@ describe('dashboard server', () => {
     }
   });
 
-  it('breaks a person\'s points down by where they came from', async () => {
+  it("breaks a person's points down by where they came from", async () => {
     const store = await createTestStore();
     const harness = await startDashboard({ store });
     try {
@@ -363,7 +365,9 @@ describe('dashboard server', () => {
       assert.equal(anon.status, 401, 'signed-out visitors are not asked');
 
       const user = await signIn(harness, { slackUserId: 'U0PLAIN01' });
-      const first = await (await fetch(`${harness.base}/api/me/agreement`, { headers: { cookie: user.cookie } })).json();
+      const first = await (
+        await fetch(`${harness.base}/api/me/agreement`, { headers: { cookie: user.cookie } })
+      ).json();
       assert.equal(first.required, true, 'the question is open on the first visit');
       assert.equal(first.agreed, null, 'no answer is invented for them');
       assert.match(first.body, /huddle history/, 'it says what the answer covers');
@@ -386,7 +390,9 @@ describe('dashboard server', () => {
       assert.equal(allowed.required, false);
       assert.equal(allowed.agreed, true);
 
-      const again = await (await fetch(`${harness.base}/api/me/agreement`, { headers: { cookie: user.cookie } })).json();
+      const again = await (
+        await fetch(`${harness.base}/api/me/agreement`, { headers: { cookie: user.cookie } })
+      ).json();
       assert.equal(again.required, false, 'answered once, asked no more');
       assert.equal(again.agreed, true);
 
@@ -443,25 +449,41 @@ describe('dashboard server', () => {
     const now = Math.floor(Date.now() / 1000);
     store.upsertHuddleChannel({ channelId: 'Cbot', name: 'public', isPrivate: false });
     store.upsertHuddleChannel({ channelId: 'Cpriv', name: 'secret', isPrivate: true });
-    store.upsertHuddle({ callId: 'Rpub', channelId: 'Cbot', startedAt: now - 200, endedAt: now - 100, status: 'ended' });
-    store.upsertHuddle({ callId: 'Rpriv', channelId: 'Cpriv', startedAt: now - 200, endedAt: now - 100, status: 'ended' });
+    store.upsertHuddle({
+      callId: 'Rpub',
+      channelId: 'Cbot',
+      startedAt: now - 200,
+      endedAt: now - 100,
+      status: 'ended',
+    });
+    store.upsertHuddle({
+      callId: 'Rpriv',
+      channelId: 'Cpriv',
+      startedAt: now - 200,
+      endedAt: now - 100,
+      status: 'ended',
+    });
     const harness = await startDashboard({
       store,
       botChannels: { list: async () => ['Cbot', 'Cpriv'], invalidate() {} },
     });
     try {
       const user = await signIn(harness, { slackUserId: 'U0PLAIN01' });
-      const userList = await (
-        await fetch(`${harness.base}/api/huddles`, { headers: { cookie: user.cookie } })
-      ).json();
-      assert(userList.huddles.some((huddle) => huddle.callId === 'Rpub'), 'public huddles are listed');
+      const userList = await (await fetch(`${harness.base}/api/huddles`, { headers: { cookie: user.cookie } })).json();
+      assert(
+        userList.huddles.some((huddle) => huddle.callId === 'Rpub'),
+        'public huddles are listed',
+      );
       assert(!userList.huddles.some((huddle) => huddle.callId === 'Rpriv'), 'private huddles are not');
 
       const owner = await signIn(harness);
       const ownerList = await (
         await fetch(`${harness.base}/api/huddles`, { headers: { cookie: owner.cookie } })
       ).json();
-      assert(ownerList.huddles.some((huddle) => huddle.callId === 'Rpriv'), 'the owner sees both');
+      assert(
+        ownerList.huddles.some((huddle) => huddle.callId === 'Rpriv'),
+        'the owner sees both',
+      );
     } finally {
       await harness.stop();
     }

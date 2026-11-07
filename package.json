@@ -9,7 +9,7 @@
     "lint": "npx @biomejs/biome check .",
     "lint:fix": "npx @biomejs/biome check --write .",
     "start": "node app.js",
-    "test": "node --test tests/*.spec.js tests/**/*.spec.js",
+    "test": "node --test tests/*.spec.js",
     "typecheck": "tsc --noEmit"
   },
   "license": "MIT",

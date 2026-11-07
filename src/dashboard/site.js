@@ -293,9 +293,11 @@ export function renderLanding({ signedIn = false } = {}) {
     <p class="lede">Orbit sits in your channels, tracks every huddle, keeps the leaderboard, and collects the
       funny bits in recaps. It never joins the call and never records audio.</p>
     <div class="row">
-      ${signedIn
-        ? '<a class="btn" href="/dashboard">Open your dashboard</a><a class="btn ghost" href="#features">What it does</a>'
-        : '<a class="btn" href="/login">Sign in with Slack</a><a class="btn ghost" href="#how">How it works</a>'}
+      ${
+        signedIn
+          ? '<a class="btn" href="/dashboard">Open your dashboard</a><a class="btn ghost" href="#features">What it does</a>'
+          : '<a class="btn" href="/login">Sign in with Slack</a><a class="btn ghost" href="#how">How it works</a>'
+      }
     </div>
     <p class="note">Slack sign in. Nothing about the leaderboard or huddle history is public.</p>
   </div>
@@ -388,7 +390,13 @@ export function renderLanding({ signedIn = false } = {}) {
 }
 
 /** The signed-in application shell and pages. */
-export function renderApp({ signedIn = false, role = null, displayRole = null, isAdminViewer = false, view = 'dashboard' } = {}) {
+export function renderApp({
+  signedIn = false,
+  role = null,
+  displayRole = null,
+  isAdminViewer = false,
+  view = 'dashboard',
+} = {}) {
   const body = VIEWS[view] ? VIEWS[view]({ role, isAdminViewer }) : VIEWS.dashboard();
   return `<!doctype html>
 <html lang="en" data-view="${escapeAttr(view)}">
@@ -1191,7 +1199,10 @@ function icon(name) {
 }
 
 function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  return String(value ?? '').replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+  );
 }
 function escapeAttr(value) {
   return escapeHtml(value);

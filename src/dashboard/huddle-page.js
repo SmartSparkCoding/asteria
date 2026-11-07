@@ -127,9 +127,7 @@ function reasonChips(reasons) {
   return awardItems(reasons)
     .map((item) => {
       const label = item.label === 'backfilled' ? 'rebuilt from recorded attendance' : item.label;
-      return `<span class="reason">${escapeHtml(label)}${
-        item.points ? `<b>+${item.points}</b>` : ''
-      }</span>`;
+      return `<span class="reason">${escapeHtml(label)}${item.points ? `<b>+${item.points}</b>` : ''}</span>`;
     })
     .join('');
 }

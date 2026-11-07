@@ -28,7 +28,7 @@ export function parseRecapLink(link, channelId) {
   return text;
 }
 
-export function renderRecapPage({ channel, viewer, submissions = [], error = '', notice = '' }) {
+export function renderRecapPage({ channel, submissions = [], error = '', notice = '' }) {
   const policy = RECAP_POLICY(channel.name || channel.id);
   const items = submissions.length
     ? submissions
@@ -166,7 +166,10 @@ h2{font-size:10px;letter-spacing:.17em;text-transform:uppercase;color:var(--ink-
 }
 
 function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  return String(value ?? '').replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+  );
 }
 function escapeAttr(value) {
   return escapeHtml(value);
