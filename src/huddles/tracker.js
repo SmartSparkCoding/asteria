@@ -23,6 +23,22 @@ const RECONCILE_QUIET_SECONDS = 90;
 // silence, which no live huddle reaches without its members showing up in the
 // participant events we listen for.
 const UNVERIFIABLE_QUIET_SECONDS = 60 * 60;
+// Presence events are the fast path and the lossy one, so every running huddle
+// is also read from Slack's roster on this cadence. Thirty seconds puts a hard
+// ceiling of one sample on each end of a person's recorded time: the total is a
+// floor, not a guess. Ten concurrent huddles is twenty `conversations.replies`
+// calls a minute, well inside the rate limit.
+const SAMPLE_INTERVAL_MS = 30 * 1000;
+// A rate limited `conversations.list` used to make an event look like it came
+// from a channel the bot is not in, and that event was then dropped forever.
+const MEMBERSHIP_RETRY_MS = 500;
+// The startup catch-up scans recent history for huddles that began while Orbit
+// was not listening. Bounded in both channels and rate, since it is best effort.
+const BACKFILL_CHANNEL_LIMIT = 25;
+const BACKFILL_CHANNEL_SPACING_MS = 250;
+// A huddle found by that catch-up which started longer ago than this does not
+// get a "huddle started" announcement; it is already well under way.
+const BACKFILL_QUIET_START_SECONDS = 120;
 
 function parseJsonArray(value) {
   try {
@@ -116,7 +132,19 @@ function buildSillyReply(huddle) {
  * thread) comes from `huddle_thread` messages. When a huddle ends the starter
  * is DMed for an optional huddle review.
  */
-export function createHuddleTracker({ app, store, client, logger, ownerId = '', botChannels, baseUrl = '' }) {
+export function createHuddleTracker({
+  app,
+  store,
+  client,
+  logger,
+  ownerId = '',
+  botChannels,
+  baseUrl = '',
+  // Scanning recent history at boot costs one `conversations.history` call per
+  // channel, so it is opted into by the process that owns the socket rather
+  // than switched on for every tracker a test builds.
+  bootBackfill = false,
+}) {
   function buildReviewPrompt(callId, duration) {
     return {
       text: 'Your huddle just ended. Want a huddle review?',
@@ -239,15 +267,28 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
     if (membershipCache.ids && Date.now() - membershipCache.at < MEMBERSHIP_TTL_MS) {
       return membershipCache.ids.includes(id);
     }
-    try {
-      const ids = await botChannels.list({ includeDms: true });
-      membershipCache.ids = Array.isArray(ids) ? ids : [];
-      membershipCache.at = Date.now();
-    } catch (error) {
-      logger.warn?.('Could not confirm which channels the bot is in; ignoring huddle events', error);
-      return false;
+    // One retry, and failures are never cached. A rate limited or briefly
+    // failing `conversations.list` used to make every event in flight look like
+    // it came from a foreign channel, and the event was then discarded for good,
+    // which is a silent way to lose a join.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const ids = await botChannels.list({ includeDms: true });
+        membershipCache.ids = Array.isArray(ids) ? ids : [];
+        membershipCache.at = Date.now();
+        return membershipCache.ids.includes(id);
+      } catch (error) {
+        if (attempt === 0) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, MEMBERSHIP_RETRY_MS).unref?.();
+          });
+          continue;
+        }
+        logger.warn?.('Could not confirm which channels the bot is in; ignoring huddle events', error);
+        return false;
+      }
     }
-    return membershipCache.ids.includes(id);
+    return false;
   }
 
   function channelRules(channelId) {
@@ -475,6 +516,15 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
     // The running totals above cannot answer "why does this person have 808
     // points", and a huddle's own page needs the per-person reasons. Keep them.
     store.saveHuddleAwards(huddle.call_id, huddle.channel_id || '', awards);
+    // One line per finished huddle saying how much of it was actually witnessed.
+    // Without it, "why is my time wrong" can only be answered by reading the
+    // database by hand, and the honest answer (this is a floor) never appears.
+    const credited = attendance.participants.filter((row) => row.seconds > 0).length;
+    const proven = attendance.participants.reduce((total, row) => total + row.seconds, 0);
+    const ceiling = attendance.participants.reduce((total, row) => total + row.ceilingSeconds, 0);
+    logger.info?.(
+      `huddle_accuracy ${huddle.call_id} members=${members.length} credited=${credited} proven=${proven}s ceiling=${ceiling}s partial=${attendance.partial} sample=${SAMPLE_INTERVAL_MS / 1000}s`,
+    );
     // Handed back so the end-of-huddle summary can state the real total rather
     // than re-reading the leaderboard, which is per user and not per huddle.
     return awards;
@@ -544,11 +594,41 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
     });
   }
 
+  /**
+   * Run presence work for one user in order, and never let one failure wedge it.
+   *
+   * The queue is dropped as soon as it drains, so a quiet workspace holds no
+   * state for anybody.
+   */
+  const presenceQueues = new Map();
+  function enqueuePresence(userId, task) {
+    const previous = presenceQueues.get(userId) ?? Promise.resolve();
+    const next = previous.then(task, task).catch((error) => {
+      logger.error?.('Apply huddle presence', error);
+    });
+    presenceQueues.set(userId, next);
+    void next.then(() => {
+      if (presenceQueues.get(userId) === next) {
+        presenceQueues.delete(userId);
+      }
+    });
+    return next;
+  }
+
   async function handleUserHuddleChange({ event }) {
     const userId = event?.user?.id;
     if (!userId) {
       return;
     }
+    // Presence for one person is applied one event at a time. Slack sends these
+    // in bursts and out of order, and two overlapping runs for the same user read
+    // the same prior state, so a repeat join and a leave can both decide they own
+    // the interval. Chaining per user keeps Slack's order without serialising the
+    // workspace, where one slow huddle would stall everybody else.
+    return enqueuePresence(userId, () => applyHuddlePresence(userId, event));
+  }
+
+  async function applyHuddlePresence(userId, event) {
     const profile = event.user.profile ?? {};
     const prev = store.getUserHuddleState(userId);
     const actions = nextUserHuddleAction(prev, {
@@ -565,40 +645,139 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
   }
 
   /**
-   * Merge Slack's roster into the member table.
+   * Bring stored presence in line with the roster Slack publishes for a huddle.
    *
-   * Presence events can be missed (an app restart, a dropped websocket, a huddle
-   * joined while the bot was redeploying), and a missed join used to mean the
-   * person never appeared on the huddle page at all. Slack's room payload is the
-   * authority, so it is merged on every thread message and once at startup for
-   * huddles that are already running.
+   * This is the accuracy story in one function. `user_huddle_changed` is the
+   * fast path and the precise one, but it is best effort: Slack coalesces it,
+   * re-sends it on every mute and screenshare, and loses leave events outright.
+   * Reading the roster is the slow path, and it never misses anybody who is in
+   * the room at the moment we look.
+   *
+   * Both are written to `huddle_attendance` as intervals and `mergeIntervals`
+   * unions them, so two witnesses to the same presence cannot double count and
+   * whichever one saw the moment wins. Nobody is ever credited from
+   * `participant_history`, which says who was there without saying when.
+   *
+   * Everything here is one sided on purpose. A departure closes at the last
+   * moment somebody was *seen inside*, never at "now", so a poll can never
+   * credit a second nobody witnessed.
    */
-  function mergeRoomRoster(room) {
-    if (!room?.id) {
-      return;
+  function reconcileRosterPresence(room, { source = 'poll' } = {}) {
+    const callId = room?.id;
+    const current = Array.isArray(room?.participants) ? room.participants.filter(Boolean) : null;
+    if (!callId || !current) {
+      return null;
     }
-    const current = Array.isArray(room.participants) ? room.participants.filter(Boolean) : null;
-    const everIn = [...new Set([...(room.participant_history || []), ...(current || [])].filter(Boolean))];
-    for (const userId of everIn) {
-      if (!store.getHuddleMember(room.id, userId)) {
-        store.upsertHuddleMember({
-          callId: room.id,
-          userId,
-          firstSeenAt: room.date_start || 0,
-          lastSeenAt: room.date_start || 0,
-          isIn: Boolean(current && current.includes(userId)),
-        });
+    const observedAt = nowEpochSeconds();
+    const present = new Set(current);
+    const ended = Boolean(Number(room.date_end));
+
+    // Rostered first, so somebody who is both in the history and in the room
+    // ends up with one row rather than the history row overwriting the live one.
+    if (source !== 'poll') {
+      for (const userId of room.participant_history || []) {
+        if (userId && !store.getHuddleMember(callId, userId)) {
+          store.upsertHuddleMember({
+            callId,
+            userId,
+            firstSeenAt: room.date_start || 0,
+            lastSeenAt: room.date_start || 0,
+            isIn: false,
+          });
+        }
       }
     }
-    // Only trust the live list when Slack actually sent one; an empty list on a
-    // closing message would mark everybody out before the end is finalised.
-    if (current && current.length > 0) {
-      const inNow = new Set(current);
-      for (const member of store.listHuddleMembers(room.id)) {
-        const shouldBeIn = inNow.has(member.user_id);
-        if (Boolean(Number(member.is_in)) !== shouldBeIn) {
-          store.setHuddleMemberPresence(room.id, member.user_id, shouldBeIn);
+
+    const members = new Map(store.listHuddleMembers(callId).map((member) => [member.user_id, member]));
+    const open = new Map(store.listOpenHuddleAttendance(callId).map((row) => [row.user_id, row]));
+
+    const joined = [];
+    for (const userId of present) {
+      if (open.has(userId)) {
+        continue;
+      }
+      // Either nobody saw them join, or their interval was closed by a leave
+      // Slack invented. They are in the room right now, so the interval starts
+      // here rather than at the huddle start: we can prove this and not that.
+      store.openHuddleAttendance(callId, userId, observedAt);
+      store.setUserHuddleState({ userId, callId, isIn: true });
+      if (!members.has(userId)) {
+        store.upsertHuddleMember({
+          callId,
+          userId,
+          firstSeenAt: observedAt,
+          lastSeenAt: observedAt,
+          isIn: true,
+        });
+      }
+      joined.push(userId);
+    }
+    if (present.size > 0) {
+      store.touchHuddleMembers(callId, [...present], observedAt);
+    }
+
+    // An empty live list is not evidence that everybody left at once: Slack
+    // sends one on the closing message before the end is finalised. A huddle
+    // that has actually ended is different, its roster is final.
+    const left = [];
+    if (present.size > 0 || ended) {
+      for (const [userId, member] of members) {
+        if (present.has(userId) || Number(member.is_in) !== 1) {
+          continue;
         }
+        const lastSeen = Math.min(Number(member.last_seen_at) || 0, observedAt);
+        const joinedAt = Number(open.get(userId)?.joined_at) || 0;
+        // Only close somebody we have actually seen since they joined. The end
+        // is the last moment they were witnessed inside, never the current time,
+        // so a departure can only ever shorten what is credited, and somebody
+        // seen once and then gone gets a zero length interval rather than the
+        // rest of the call.
+        if (lastSeen <= 0 || lastSeen < joinedAt) {
+          continue;
+        }
+        store.closeHuddleAttendance(callId, userId, lastSeen);
+        store.setHuddleMemberPresence(callId, userId, false);
+        const state = store.getUserHuddleState(userId);
+        if (!state?.call_id || state.call_id === callId) {
+          store.setUserHuddleState({ userId, callId: '', isIn: false });
+        }
+        left.push(userId);
+      }
+    }
+
+    const channelId = store.getHuddle(callId)?.channel_id || '';
+    for (const userId of joined) {
+      store.recordTriggerLog({ userId, action: 'huddle_join_observed', detail: callId, channelId });
+    }
+    for (const userId of left) {
+      store.recordTriggerLog({ userId, action: 'huddle_leave_observed', detail: callId, channelId });
+    }
+    return { present: present.size, joined: joined.length, left: left.length };
+  }
+
+  /**
+   * Re-read the roster of every running huddle, once per interval.
+   *
+   * This is the heartbeat of the whole thing. Presence events are the fast path
+   * and also the lossy one, so each live huddle is asked for its roster and the
+   * answer is written down as attendance. At the default thirty seconds that
+   * puts a hard ceiling on the error: a person's total can be short by at most
+   * one sample at each end, and it is a floor rather than a guess.
+   *
+   * It also ends huddles. `room.date_end` is the only record of when a call
+   * actually stopped, and reading it here closes a finished huddle within one
+   * sample instead of waiting for it to look quiet for a minute and a half.
+   */
+  async function sampleActiveHuddles() {
+    for (const huddle of store.listActiveHuddles()) {
+      const room = await fetchRoomState(huddle).catch(() => null);
+      if (!room?.id) {
+        continue;
+      }
+      reconcileRosterPresence(room, { source: 'sample' });
+      const endedAt = Math.min(Number(room.date_end) || 0, nowEpochSeconds());
+      if (endedAt > huddle.started_at) {
+        await finalizeHuddle(huddle.call_id, endedAt);
       }
     }
   }
@@ -608,12 +787,12 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
     for (const huddle of store.listActiveHuddles()) {
       const room = await fetchRoomState(huddle).catch(() => null);
       if (room) {
-        mergeRoomRoster(room);
+        reconcileRosterPresence(room, { source: 'startup' });
       }
     }
   }
 
-  async function handleHuddleThreadMessage(message) {
+  async function handleHuddleThreadMessage(message, { backfill = false } = {}) {
     const room = message?.room;
     if (room?.call_family !== 'huddle' || !room.id) {
       return;
@@ -646,32 +825,22 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
       // timestamp is when we last heard anything, not the moment we wrote.
       lastSeenAt: slackTsToEpochSeconds(message.ts) || (endedAt ?? 0),
     });
-    mergeRoomRoster(room);
     if (existing?.status === 'unverified') {
       // The channel is confirmed, so this huddle is ours and the placeholder can
       // be promoted. Slack reported joins while it was held, and those were not
-      // recorded as attendance, so they are replayed from the live user state
-      // before anything else looks at this huddle.
+      // recorded as attendance, so they are replayed from the live user state.
+      // The replay is deliberately kept: it is the only record of when somebody
+      // joined who has since gone quiet.
       store.setHuddleStatus(room.id, 'active', null);
       for (const row of store.listUsersInHuddle(room.id)) {
         await applyJoin(row.user_id, room.id);
       }
-      // Slack also tells us, in participant_history, who was in the huddle. That
-      // has no join or leave times, so it is recorded as roster only and never
-      // as attendance: crediting full duration from a list with no times would
-      // invent exactly the kind of overcount that caused this whole problem.
-      for (const userId of room.participant_history || []) {
-        if (userId && !store.getHuddleMember(room.id, userId)) {
-          store.upsertHuddleMember({
-            callId: room.id,
-            userId,
-            firstSeenAt: room.date_start || 0,
-            lastSeenAt: room.date_start || 0,
-            isIn: false,
-          });
-        }
-      }
     }
+    // Now the roster itself. `participant_history` is written as roster only,
+    // because a list with no times cannot become attendance without inventing
+    // an overcount, while everybody in `participants` is in the room right now
+    // and gets an interval from this moment on.
+    reconcileRosterPresence(room, { source: backfill ? 'backfill' : 'thread' });
     if (!rules.tracking) {
       // The channel has tracking off or paused: record the huddle silently so we
       // still have a timeline, but never announce it, review it or award points.
@@ -692,7 +861,14 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
       }
       return;
     }
-    if (!existing && !endedAt) {
+    // A huddle found by the startup catch-up that has been running for a while
+    // does not get a "started" announcement. Nobody wants the bot to announce a
+    // call that began before it woke up, and it is the fastest way to get muted.
+    const lateStart =
+      backfill &&
+      Number(room.date_start) > 0 &&
+      nowEpochSeconds() - Number(room.date_start) > BACKFILL_QUIET_START_SECONDS;
+    if (!existing && !endedAt && !lateStart) {
       const opened = store.getHuddle(room.id);
       await announceHuddleStart(opened);
       await announceTrackingToThread(opened);
@@ -821,11 +997,39 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
       const result = await historyClient.conversations.history({ channel: channelId, limit: 50 });
       for (const message of result?.messages ?? []) {
         if (message?.subtype === 'huddle_thread') {
-          handleHuddleThreadMessage(message);
+          await handleHuddleThreadMessage(message, { backfill: true });
         }
       }
     } catch (error) {
       logger.error(`Failed to backfill huddle_thread messages for ${channelId}`, error);
+    }
+  }
+
+  /**
+   * Scan recent history for huddles that began while Orbit was not listening.
+   *
+   * Nothing announces a huddle that starts during a deploy, so the only trace
+   * used to be a presence event that cannot even be filed until it knows the
+   * channel, and that placeholder is discarded an hour later. One bounded scan
+   * per channel shrinks that blind spot to the length of the restart itself,
+   * and only ever fills in huddles that are still running or newly finished.
+   */
+  async function backfillRunningHuddles() {
+    if (!botChannels?.list) {
+      return;
+    }
+    let channelIds = [];
+    try {
+      channelIds = await botChannels.list({ includeDms: true });
+    } catch (error) {
+      logger.warn?.('Could not list channels to catch up on running huddles', error);
+      return;
+    }
+    for (const channelId of (channelIds ?? []).slice(0, BACKFILL_CHANNEL_LIMIT)) {
+      await backfillChannelHuddles(channelId);
+      await new Promise((resolve) => {
+        setTimeout(resolve, BACKFILL_CHANNEL_SPACING_MS).unref?.();
+      });
     }
   }
 
@@ -1651,6 +1855,13 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
   void reconcileActiveRosters().catch((error) => {
     logger.warn?.('Could not catch up the rosters of running huddles', error);
   });
+  // Deliberately after the roster catch-up and not awaited, so a slow scan of
+  // recent history never holds up the socket.
+  if (bootBackfill) {
+    void backfillRunningHuddles().catch((error) => {
+      logger.warn?.('Could not catch up on huddles that started before startup', error);
+    });
+  }
 
   const sweepTimer = setInterval(() => {
     void sweepStaleHuddles().catch((error) => {
@@ -1678,6 +1889,13 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
   }, STALE_SWEEP_INTERVAL_MS);
   sweepTimer.unref?.();
 
+  const sampleTimer = setInterval(() => {
+    void sampleActiveHuddles().catch((error) => {
+      logger.error('Sample running huddles', error);
+    });
+  }, SAMPLE_INTERVAL_MS);
+  sampleTimer.unref?.();
+
   const reconcileTimer = setInterval(() => {
     void reconcileEndedHuddles().catch((error) => {
       logger.error('Reconcile ended huddles', error);
@@ -1694,9 +1912,11 @@ export function createHuddleTracker({ app, store, client, logger, ownerId = '', 
     OPT_OUT_ACTION_ID,
     TRACK_AGAIN_ACTION_ID,
     reconcileEndedHuddles,
+    sampleActiveHuddles,
     stop() {
       clearInterval(sweepTimer);
       clearInterval(reconcileTimer);
+      clearInterval(sampleTimer);
     },
   };
 }
