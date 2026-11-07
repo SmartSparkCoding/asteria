@@ -1264,11 +1264,12 @@ export async function createStore(databasePath, options = {}) {
      * members and points from the client, and so the ordering is defined once.
      */
     listHuddleSummaries({ limit = 50, offset = 0, channelId = '', channelIds = null, sort = 'recent' } = {}) {
-      const order = {
-        recent: 'h.started_at DESC',
-        longest: `(COALESCE(h.ended_at, CAST(strftime('%s', 'now') AS INTEGER)) - h.started_at) DESC`,
-        points: 'points DESC, h.started_at DESC',
-      }[sort] || 'h.started_at DESC';
+      const order =
+        {
+          recent: 'h.started_at DESC',
+          longest: `(COALESCE(h.ended_at, CAST(strftime('%s', 'now') AS INTEGER)) - h.started_at) DESC`,
+          points: 'points DESC, h.started_at DESC',
+        }[sort] || 'h.started_at DESC';
       const scopedIds = Array.isArray(channelIds) && channelIds.length ? channelIds : null;
       const filter = scopedIds
         ? `AND channel_id IN (${scopedIds.map((_, index) => `$c${index}`).join(',')})`
@@ -1297,13 +1298,11 @@ export async function createStore(databasePath, options = {}) {
           ...filterParams,
         },
       );
-      const total = Number(
-        bindAndFetchOne(
-          database,
-          `SELECT COUNT(1) AS n FROM huddles WHERE channel_id <> '' ${filter}`,
-          filterParams,
-        )?.n,
-      ) || 0;
+      const total =
+        Number(
+          bindAndFetchOne(database, `SELECT COUNT(1) AS n FROM huddles WHERE channel_id <> '' ${filter}`, filterParams)
+            ?.n,
+        ) || 0;
       return {
         total,
         huddles: rows.map((row) => ({
@@ -1974,11 +1973,9 @@ export async function createStore(databasePath, options = {}) {
             'SELECT * FROM huddle_recaps WHERE channel_id = $channel_id AND user_id = $user_id ORDER BY id DESC',
             { $channel_id: String(channelId || ''), $user_id: String(userId) },
           )
-        : bindAndFetchAll(
-            database,
-            'SELECT * FROM huddle_recaps WHERE channel_id = $channel_id ORDER BY id DESC',
-            { $channel_id: String(channelId || '') },
-          );
+        : bindAndFetchAll(database, 'SELECT * FROM huddle_recaps WHERE channel_id = $channel_id ORDER BY id DESC', {
+            $channel_id: String(channelId || ''),
+          });
       return rows.map((row) => {
         let links = [];
         try {
@@ -2265,11 +2262,9 @@ export async function createStore(databasePath, options = {}) {
      * and this answers a different question, which is what the total is made of.
      */
     listUserAwardReasons(userId) {
-      return bindAndFetchAll(
-        database,
-        'SELECT reasons FROM huddle_awards WHERE user_id = $id',
-        { $id: String(userId || '') },
-      ).map((row) => {
+      return bindAndFetchAll(database, 'SELECT reasons FROM huddle_awards WHERE user_id = $id', {
+        $id: String(userId || ''),
+      }).map((row) => {
         try {
           const parsed = JSON.parse(row.reasons || '[]');
           return Array.isArray(parsed) ? parsed : [];

@@ -3,18 +3,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DateTime } from 'luxon';
 import { describeHuddleChannels } from '../huddles/channels.js';
-import { createPermissions, isSlackUserId, parseOwnerIds } from '../permissions.js';
 import { awardItems, POINT_RULES } from '../huddles/points.js';
+import { createPermissions, isSlackUserId, parseOwnerIds } from '../permissions.js';
 import { buildStatusRss, readStatusEvents } from '../status/status-core.js';
-import { createDashboardAuth } from './auth.js';
 import { RECAP_AGREEMENT, RECAP_AGREEMENT_VERSION } from './agreement.js';
+import { createDashboardAuth } from './auth.js';
 import { createCachetDirectory } from './cachet.js';
 import { createFlaronDirectory } from './flaron.js';
 import { renderHuddlePage } from './huddle-page.js';
 import { resolvePermissions } from './permissions.js';
-import { renderApp, renderLanding } from './site.js';
 import { isLegacyHost, renderRebrandPage } from './rebrand.js';
 import { channelSlug, parseRecapLink, renderRecapPage } from './recap.js';
+import { renderApp, renderLanding } from './site.js';
 import { buildDashboardStats } from './stats.js';
 import { ORBIT_FAVICON } from './theme.js';
 
@@ -347,7 +347,7 @@ export function createDashboardServer({
     }
     // Browsers treat `/\evil.example` in a Location header as protocol relative,
     // and control characters do not belong in a path at all.
-    if (next.includes('\\') || /[\u0000-\u001f\u007f]/.test(next)) {
+    if (next.includes('\\') || /\p{Cc}/u.test(next)) {
       return '';
     }
     return next;

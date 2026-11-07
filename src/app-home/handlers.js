@@ -92,7 +92,6 @@ export function createHomeHandlers({
   // Only publicUrl is read here, and only to build huddle links, so a caller
   // without an environment should get no links rather than a crash.
   environment = {},
-  scheduler,
   botChannels,
   permissions = createChannelPermissions({ store }),
 }) {

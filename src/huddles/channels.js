@@ -24,8 +24,7 @@ export async function describeHuddleChannels({ store, botChannels, userId = '', 
   // An admin viewer (the fake admin role) gets the owner's view: every channel,
   // and the list of channels that have no settings yet.
   const isOwner =
-    Boolean(isAdminViewer) ||
-    (Boolean(viewerId) && viewerId === store.getSettings().personal_channel_owner_id);
+    Boolean(isAdminViewer) || (Boolean(viewerId) && viewerId === store.getSettings().personal_channel_owner_id);
 
   let botIds = null;
   let names = {};

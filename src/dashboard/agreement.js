@@ -12,8 +12,6 @@ export const RECAP_AGREEMENT_VERSION = '2026-10-recaps';
 
 export const RECAP_AGREEMENT = {
   title: 'Yearly recaps',
-  body:
-    'Orbit puts together a yearly recap of huddles. Allow it to use your huddle history and the moments you submit in recaps.',
-  note:
-    'Orbit never reads or stores your messages. This covers huddles you were in and recaps you choose to share, and you can change it whenever you like.',
+  body: 'Orbit puts together a yearly recap of huddles. Allow it to use your huddle history and the moments you submit in recaps.',
+  note: 'Orbit never reads or stores your messages. This covers huddles you were in and recaps you choose to share, and you can change it whenever you like.',
 };

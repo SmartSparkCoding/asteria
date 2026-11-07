@@ -311,10 +311,7 @@ describe('the 67 bit', () => {
     assert.equal(client.chat.postMessage.mock.callCount(), 1, 'one reply despite every rule being off');
     const posted = client.chat.postMessage.mock.calls[0].arguments[0];
     assert.equal(posted.channel, 'Cgolf');
-    assert(
-      ['6 7', '6 7 🗣️', 'six seven 🗣️', '6 7. no notes.'].includes(posted.text),
-      `a meme line, got: ${posted.text}`,
-    );
+    assert(['6 7', '6 7 🗣️', 'six seven 🗣️', '6 7. no notes.'].includes(posted.text), `a meme line, got: ${posted.text}`);
     assert(
       store.listTriggerLog().some((entry) => entry.action === 'sixty_seven'),
       'logged',
