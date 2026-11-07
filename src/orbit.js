@@ -126,6 +126,11 @@ export async function createOrbitRuntime() {
     // Every huddle gets a link in its channel. Without this the link would be
     // built from a guess, and a wrong host in a public channel is not a small bug.
     baseUrl: environment.publicUrl,
+    // A huddle that starts during a deploy is invisible otherwise: no thread
+    // message, no announcement, and the presence events that follow cannot even
+    // be filed until they know the channel, so they land on a placeholder that
+    // is discarded an hour later.
+    bootBackfill: true,
   });
 
   const todoistSync = createTodoistSync({
