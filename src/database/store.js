@@ -1343,6 +1343,10 @@ export async function createStore(databasePath, options = {}) {
       for (const row of rows) {
         bindAndRun(database, 'DELETE FROM huddle_members WHERE call_id = $call_id', { $call_id: row.call_id });
         bindAndRun(database, 'DELETE FROM huddle_attendance WHERE call_id = $call_id', { $call_id: row.call_id });
+        // The award rows have to go too. purgeOrphanHuddles always did this and
+        // this one did not, so a purged placeholder could leave awards behind
+        // pointing at a huddle that no longer exists.
+        bindAndRun(database, 'DELETE FROM huddle_awards WHERE huddle_id = $call_id', { $call_id: row.call_id });
         bindAndRun(database, 'DELETE FROM huddles WHERE call_id = $call_id', { $call_id: row.call_id });
       }
       if (rows.length > 0) {
@@ -1507,12 +1511,30 @@ export async function createStore(databasePath, options = {}) {
             WHEN excluded.channel_id <> '' THEN excluded.channel_id
             ELSE huddles.channel_id
           END,
-          channel_name = excluded.channel_name,
-          created_by = excluded.created_by,
+          -- Same reasoning for everything else the join event cannot know. A
+          -- later payload without a thread root used to blank thread_root_ts,
+          -- which broke fetchRoomState for good: the huddle could then never be
+          -- verified, reconciled or ended from Slack's own room state.
+          channel_name = CASE
+            WHEN excluded.channel_name <> '' THEN excluded.channel_name
+            ELSE huddles.channel_name
+          END,
+          created_by = CASE
+            WHEN excluded.created_by <> '' THEN excluded.created_by
+            ELSE huddles.created_by
+          END,
           started_at = excluded.started_at,
           ended_at = excluded.ended_at,
-          thread_root_ts = excluded.thread_root_ts,
-          participant_json = excluded.participant_json,
+          thread_root_ts = CASE
+            WHEN excluded.thread_root_ts <> '' THEN excluded.thread_root_ts
+            ELSE huddles.thread_root_ts
+          END,
+          -- participant_json only ever grows, so an empty list is a payload that
+          -- did not carry it rather than a huddle whose history was erased.
+          participant_json = CASE
+            WHEN excluded.participant_json NOT IN ('', '[]') THEN excluded.participant_json
+            ELSE huddles.participant_json
+          END,
           status = excluded.status,
           last_seen_at = excluded.last_seen_at
       `,
@@ -1552,20 +1574,6 @@ export async function createStore(databasePath, options = {}) {
       const changes = getRowsChanged(database);
       persist();
       return changes > 0;
-    },
-
-    markHuddlePrompted(callId) {
-      bindAndRun(
-        database,
-        `
-        UPDATE huddles SET status = 'prompted', last_seen_at = CURRENT_TIMESTAMP
-        WHERE call_id = $call_id
-      `,
-        {
-          $call_id: callId,
-        },
-      );
-      persist();
     },
 
     setHuddleOptedOut(callId) {
@@ -1870,6 +1878,27 @@ export async function createStore(databasePath, options = {}) {
       });
     },
 
+    /**
+     * The same list, with the moment each state was last written.
+     *
+     * A huddle held as an unverified placeholder records joins but no
+     * attendance, because the channel is not known yet. When the channel is
+     * confirmed those joins are replayed, and `since` is the only record of when
+     * they actually happened. Replaying them at "now" credited people from the
+     * moment the thread message arrived instead of the moment they joined.
+     */
+    listUsersInHuddleSince(callId) {
+      return bindAndFetchAll(
+        database,
+        `
+        SELECT user_id, CAST(strftime('%s', updated_at) AS INTEGER) AS since
+        FROM huddle_user_state
+        WHERE call_id = $call_id AND is_in = 1
+      `,
+        { $call_id: String(callId || '') },
+      );
+    },
+
     listTriggerLog(limit = 50, channelIds = null) {
       if (Array.isArray(channelIds)) {
         if (channelIds.length === 0) {
@@ -1911,14 +1940,25 @@ export async function createStore(databasePath, options = {}) {
       );
     },
 
-    listHuddleChannelIds() {
+    /**
+     * Every channel that has at least one huddle.
+     *
+     * The dashboard filter used to be built from the current page of results, so
+     * a channel whose last huddle was older than that page vanished from the
+     * dropdown and could not be filtered to at all.
+     */
+    listHuddleChannelIds({ channelIds = null } = {}) {
+      const scopedIds = Array.isArray(channelIds) && channelIds.length ? channelIds : null;
+      const filter = scopedIds ? `AND channel_id IN (${scopedIds.map((_, index) => `$c${index}`).join(',')})` : '';
+      const params = scopedIds ? Object.fromEntries(scopedIds.map((id, index) => [`$c${index}`, String(id)])) : {};
       return bindAndFetchAll(
         database,
         `
         SELECT DISTINCT channel_id FROM huddles
-        WHERE channel_id != ''
+        WHERE channel_id != '' ${filter}
         ORDER BY channel_id
       `,
+        params,
       ).map((row) => row.channel_id);
     },
 
@@ -2498,17 +2538,26 @@ export async function createStore(databasePath, options = {}) {
     },
 
     /**
-     * Close somebody's open presence interval, keeping the exact leave time.
+     * Close somebody's open presence interval.
+     *
+     * `inferred` says whether the end time was observed or worked out. A leave
+     * event gives the real moment; a roster poll only knows the last time the
+     * person was seen inside, which is a ceiling and must not score.
      */
-    closeHuddleAttendance(callId, userId, at) {
+    closeHuddleAttendance(callId, userId, at, { inferred = false } = {}) {
       const leftAt = Math.floor(Number(at) || Date.now() / 1000);
       bindAndRun(
         database,
         `
-        UPDATE huddle_attendance SET left_at = $left_at
+        UPDATE huddle_attendance SET left_at = $left_at, inferred = $inferred
         WHERE call_id = $call_id AND user_id = $user_id AND left_at IS NULL
         `,
-        { $call_id: String(callId || ''), $user_id: String(userId || ''), $left_at: leftAt },
+        {
+          $call_id: String(callId || ''),
+          $user_id: String(userId || ''),
+          $left_at: leftAt,
+          $inferred: inferred ? 1 : 0,
+        },
       );
       persist();
     },

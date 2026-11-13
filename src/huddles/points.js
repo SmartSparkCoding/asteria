@@ -120,6 +120,8 @@ export function computeHuddlePoints({
   // Points follow provable time, so a member whose join never closed still
   // scores the stretches we can demonstrate and nothing beyond them.
   const ranked = stats.participants.filter((participant) => (participant.provableSeconds ?? 0) > 0);
+  // Showing up at all is worth a point, so a sub-minute appearance floors at one
+  // minute rather than scoring nothing. Beyond that it is whole minutes only.
   const durationAwards = ranked.map((participant) => {
     const durationMinutes = Math.max(1, Math.floor(participant.provableSeconds / 60));
     return { userId: participant.userId, durationMinutes };
@@ -131,19 +133,31 @@ export function computeHuddlePoints({
 
   // Rank bonuses go only to people whose attendance is fully accounted for, so
   // a partial record can never win a place off someone else's missing events.
-  const fullyTracked = ranked.filter((participant) => !participant.partial);
-  fullyTracked.forEach((participant, index) => {
+  // The place number comes from the full ranking, not from the filtered list:
+  // dropping a partial first place used to relabel the runner-up as "rank 1".
+  ranked.forEach((participant, index) => {
+    if (participant.partial) {
+      return;
+    }
     const bonus = RANK_BONUS[index];
     if (bonus) {
       addPoints(participant.userId, bonus, 'rank', `rank ${index + 1}`);
     }
   });
 
-  if (messageStats?.longest?.userId) {
-    addPoints(messageStats.longest.userId, LONGEST_MESSAGE_POINTS, 'message', 'longest message');
+  // A message bonus is for being in the huddle, so it only goes to somebody who
+  // was actually there. The same person can hold both bonuses when they wrote
+  // two different messages; one message means one award, which is the only case
+  // where both stats point at the same timestamp.
+  const attended = new Set(ranked.map((participant) => participant.userId));
+  const longest = messageStats?.longest;
+  const shortest = messageStats?.shortest;
+  const sameMessage = Boolean(longest?.ts) && longest?.ts === shortest?.ts;
+  if (longest?.userId && attended.has(longest.userId)) {
+    addPoints(longest.userId, LONGEST_MESSAGE_POINTS, 'message', 'longest message');
   }
-  if (messageStats?.shortest && messageStats.shortest.userId !== messageStats.longest?.userId) {
-    addPoints(messageStats.shortest.userId, SHORTEST_MESSAGE_POINTS, 'message', 'shortest message');
+  if (shortest?.userId && attended.has(shortest.userId) && !sameMessage) {
+    addPoints(shortest.userId, SHORTEST_MESSAGE_POINTS, 'message', 'shortest message');
   }
 
   addPoints(huddle.created_by, STARTER_POINTS, 'starter', 'started the huddle');

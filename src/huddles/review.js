@@ -27,9 +27,16 @@ export function computeHuddleStats({ huddle, members, attendance = null, partici
         userId: entry.userId,
         firstSeenAt: entry.intervals[0]?.from ?? null,
         lastSeenAt: entry.intervals.length ? entry.intervals[entry.intervals.length - 1].to : null,
-        durationSeconds: entry.partial ? null : entry.seconds,
+        // A partial record still has a floor we can state. Reporting null here
+        // printed "unknown" for somebody we had watched for five hours, while
+        // the huddle page said "at least 5h" for the same person. Only a record
+        // with nothing proven at all is genuinely unknown.
+        durationSeconds: entry.seconds > 0 ? entry.seconds : null,
         provableSeconds: entry.seconds,
         partial: entry.partial,
+        // Only an interval-derived duration is a floor. The legacy span below is
+        // a guess in the other direction, so it must not be labelled "at least".
+        durationIsFloor: entry.partial,
       }))
     : members.map((member) => {
         const durationSeconds =
@@ -150,7 +157,12 @@ function personLabel(userId, displayNames) {
 export function formatHuddleReviewMessage(stats, { timezone = 'UTC', displayNames = {} } = {}) {
   const participantLines = stats.participants.map((participant) => {
     const isLongest = participant.userId === stats.longestParticipantId;
-    const durationLabel = formatDuration(participant.durationSeconds);
+    // A partial record is a floor, so say so rather than presenting it as the
+    // whole time. Same wording the huddle page uses.
+    const durationLabel =
+      participant.durationIsFloor && participant.durationSeconds != null
+        ? `at least ${formatDuration(participant.durationSeconds)}`
+        : formatDuration(participant.durationSeconds);
     const badge = isLongest ? ' *— longest in the huddle*' : '';
     return `• ${personLabel(participant.userId, displayNames)} — ${durationLabel}${badge}`;
   });

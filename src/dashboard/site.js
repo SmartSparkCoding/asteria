@@ -1,4 +1,4 @@
-import { ORBIT_FAVICON, ORBIT_MARK_SVG } from './theme.js';
+import { CTP, ORBIT_FAVICON, ORBIT_MARK_SVG, THEME_TOKENS } from './theme.js';
 
 /**
  * Orbit's entire website: the public landing page and the signed-in app.
@@ -8,19 +8,16 @@ import { ORBIT_FAVICON, ORBIT_MARK_SVG } from './theme.js';
  * were rebuilt.
  */
 
-const ACCENT = '#cba6f7';
-const ACCENT_2 = '#b4befe';
-
-const TOKENS = `
-:root{color-scheme:dark;
-  --bg:#0b0d10;--bg-2:#0e1115;--surface:#12161b;--raised:#171c23;--hover:#1c222a;
-  --line:#232a33;--line-2:#2e3742;
-  --ink:#e7eaf0;--ink-2:#b3bcc9;--muted:#8792a2;
-  --accent:${ACCENT};--accent-2:${ACCENT_2};
-  --green:#a6e3a1;--red:#f38ba8;--yellow:#f9e2af;--blue:#89b4fa;--orange:#fab387;
-  --radius:8px;--radius-lg:10px;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+const TOKENS = `${THEME_TOKENS}
+:root{
+  /* Aliases so the site and the huddle page speak the same palette. The site
+     used to define its own near-black token set, which made the two halves of
+     the product look like different apps. Everything here resolves to a
+     Catppuccin role above. */
+  --bg-2:${CTP.crust};--hover:${CTP.surface1};--line-2:${CTP.surface1};
+  --muted:${CTP.subtext0};--accent-2:var(--accent-bright);
+  --yellow:${CTP.yellow};--orange:${CTP.peach};
+  --radius:var(--r);--radius-lg:var(--r-lg);
 }`;
 
 const BASE = `
@@ -42,7 +39,7 @@ svg{display:block}
 
 /* buttons */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;
-  border:1px solid transparent;border-radius:var(--radius);background:var(--accent);color:#0b0d10;
+  border:1px solid transparent;border-radius:var(--radius);background:var(--accent);color:var(--ctp-crust);
   font-size:12.5px;font-weight:650;cursor:pointer;white-space:nowrap}
 .btn:hover{background:var(--accent-2);text-decoration:none}
 .btn:active{transform:translateY(1px)}
@@ -72,6 +69,14 @@ textarea{resize:vertical;min-height:90px;font-family:var(--mono);font-size:12.5p
 .sw input:checked+i{background:rgba(203,166,247,.28);border-color:var(--accent)}
 .sw input:checked+i::after{transform:translateX(15px);background:var(--accent)}
 .sw input:focus-visible+i{outline:2px solid var(--accent-2);outline-offset:2px}
+/* Phones get real touch targets. The desktop sizes are deliberately compact. */
+@media (pointer:coarse){
+  .btn{height:44px;padding:0 16px;font-size:13.5px}
+  .btn.tiny{height:38px;padding:0 12px;font-size:12px}
+  .sw{width:46px;height:26px}
+  .sw i::after{width:19px;height:19px;top:2px;left:2px}
+  .sw input:checked+i::after{transform:translateX(20px)}
+}
 
 /* tags */
 .tag{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border:1px solid var(--line-2);
@@ -94,6 +99,8 @@ tbody tr:hover td{background:var(--bg-2)}
 td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
 td.act{text-align:right;white-space:nowrap}
 .empty-cell{text-align:center;color:var(--muted);padding:32px 10px !important}
+.optin-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding-bottom:10px;
+  margin-bottom:4px;border-bottom:1px solid var(--line)}
 .sub{color:var(--muted);font-size:11.5px}
 .stack{display:grid;gap:2px;min-width:0}
 .stack .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -129,11 +136,19 @@ td.act{text-align:right;white-space:nowrap}
 .kpi .k{font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted);font-weight:650}
 .kpi .v{font-family:var(--mono);font-size:22px;line-height:1.1;margin-top:6px;letter-spacing:-.03em}
 .kpi .h{font-size:10.5px;color:var(--muted);margin-top:2px}
+.kpis.four{grid-template-columns:repeat(4,minmax(0,1fr))}
 @media (max-width:820px){.kpis{grid-template-columns:repeat(3,1fr)}
+  /* The Users row has four cards, so it reflows on its own rather than
+     inheriting the five card breakpoints. */
+  .kpis.four{grid-template-columns:repeat(2,1fr)}
+  .kpis.four .kpi:nth-child(3){border-left:0}
+  .kpis.four .kpi:nth-child(n+3){border-top:1px solid var(--line)}
   .kpi:nth-child(4){border-left:0;border-top:1px solid var(--line)}
   .kpi:nth-child(5){border-top:1px solid var(--line)}
   .kpi:nth-child(n+4){padding-top:12px}}
 @media (max-width:520px){.kpis{grid-template-columns:repeat(2,1fr)}
+  /* A lone last card would sit in half the row with an empty gap beside it. */
+  .kpis .kpi:last-child:nth-child(odd){grid-column:1 / -1;border-left:0}
   .kpi:nth-child(odd){border-left:0}
   .kpi:nth-child(3){border-top:1px solid var(--line)}
   .kpi:nth-child(4){border-top:1px solid var(--line)}
@@ -143,6 +158,8 @@ td.act{text-align:right;white-space:nowrap}
 .lead{list-style:none;margin:0;padding:0}
 .lead li{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:9px;align-items:center;
   padding:8px 2px;border-bottom:1px solid var(--line)}
+/* The failure message is a plain sentence, not a row of three columns. */
+.lead li.empty-cell{display:block;text-align:center;padding:24px 10px;border-bottom:0}
 .lead li:last-child{border-bottom:0}
 .lead .r{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right}
 .lead li:nth-child(1) .r{color:var(--yellow)}
@@ -207,6 +224,9 @@ const LANDING_STYLES = `
 .lnav .links a{color:var(--muted);font-size:12.5px;font-weight:550;padding:6px 9px;border-radius:6px}
 .lnav .links a:hover{color:var(--ink);background:var(--surface);text-decoration:none}
 .lnav .sp{flex:1}
+.notice{max-width:1120px;margin:18px auto 0;padding:10px 14px;border:1px solid var(--red-ring);
+  border-radius:var(--radius);background:var(--red-tint);color:var(--ink);font-size:13px}
+.notice[role]{max-width:calc(1120px - 48px)}
 .hero{max-width:1120px;margin:0 auto;padding:68px 24px 48px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
   gap:48px;align-items:center}
 @media (max-width:920px){.hero{grid-template-columns:1fr;padding-top:48px;gap:34px}}
@@ -259,10 +279,21 @@ footer{border-top:1px solid var(--line);margin-top:40px}
 footer .in{max-width:1120px;margin:0 auto;padding:20px 24px 34px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:11.5px}
 `;
 
-export function renderLanding({ signedIn = false } = {}) {
+/**
+ * Sign in failures used to redirect here with ?error=slack and nothing read the
+ * parameter, so a broken sign in looked like the button did nothing.
+ */
+export const LANDING_NOTICES = {
+  slack: 'Slack did not finish the sign in. Try again, or DM Orbit for a sign in link.',
+  'dm-link': 'Slack sign in is not set up on this copy of Orbit. DM the bot and it will send you a link.',
+  expired: 'That sign in link has expired. Ask Orbit for a new one in Slack.',
+};
+
+export function renderLanding({ signedIn = false, notice = '' } = {}) {
   const cta = signedIn
     ? '<a class="btn" href="/dashboard">Open Orbit</a>'
     : '<a class="btn" href="/login">Sign in with Slack</a>';
+  const noticeHtml = notice ? `<p class="notice" role="status">${escapeHtml(notice)}</p>` : '';
   return `<!doctype html>
 <html lang="en" data-view="landing">
 <head>
@@ -285,6 +316,7 @@ export function renderLanding({ signedIn = false } = {}) {
   <span class="sp"></span>
   ${cta}
 </div></nav>
+${noticeHtml}
 
 <header class="hero">
   <div>
@@ -389,6 +421,44 @@ export function renderLanding({ signedIn = false } = {}) {
 </html>`;
 }
 
+/**
+ * A standalone page for the states that are not a view: 404, 403, 500.
+ *
+ * These used to be hand written in server.js with GitHub's dark hexes baked in,
+ * so a missing page looked like a different website. They now share the same
+ * tokens and type as everything else.
+ */
+export function renderErrorPage({ title = 'Not found', heading, body = '', status = 404 } = {}) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)} · Orbit</title>
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(ORBIT_FAVICON)}" type="image/svg+xml">
+<style>${TOKENS}${BASE}
+body{min-height:100vh;display:grid;place-items:center;padding:24px;text-align:center}
+.card{max-width:420px;display:grid;gap:10px;justify-items:center}
+.code{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--muted)}
+h1{font-size:20px}
+p{color:var(--ink-2);font-size:13.5px}
+.mark{color:var(--accent);margin-bottom:2px}
+</style>
+</head>
+<body>
+<main class="card">
+  <span class="mark">${ORBIT_MARK_SVG}</span>
+  <span class="code">${escapeHtml(String(status))}</span>
+  <h1>${escapeHtml(heading || title)}</h1>
+  ${body}
+  <p><a href="/dashboard">Back to Orbit</a></p>
+</main>
+</body>
+</html>`;
+}
+
 /** The signed-in application shell and pages. */
 export function renderApp({
   signedIn = false,
@@ -437,6 +507,7 @@ const TITLES = {
   users: 'Users',
   messages: 'Messages',
   admin: 'Admin',
+  forbidden: 'No access',
 };
 
 function navItems(view, { role, isAdminViewer }) {
@@ -445,7 +516,9 @@ function navItems(view, { role, isAdminViewer }) {
   const admin = owner || isAdminViewer;
   const items = [
     ['dashboard', 'Dashboard', true],
-    ['huddles', 'Huddles', true],
+    // Huddles is manager-only on the server, so showing the link to everyone
+    // meant a member's own nav sent them straight into a 403.
+    ['huddles', 'Huddles', manager],
     ['channels', 'Channels', manager],
     ['recaps', 'Recaps', manager],
     ['j-log', 'Daily update', owner],
@@ -496,13 +569,15 @@ const APP_STYLES = `
 `;
 
 const VIEWS = {
-  dashboard: () => `  <div class="page-head">
+  dashboard: ({ role } = {}) => {
+    const manager = role === 'manager' || role === 'owner';
+    return `  <div class="page-head">
     <div>
       <p class="kicker">dashboard</p>
       <h1>Overview</h1>
       <div class="desc">What Orbit has seen, what it scored, and which channels it watches.</div>
     </div>
-    <div class="actions"><a class="btn ghost" href="/huddles">All huddles</a></div>
+    ${manager ? '<div class="actions"><a class="btn ghost" href="/huddles">All huddles</a></div>' : ''}
   </div>
 
   <section class="agree-wrap hidden" id="agreement" aria-live="polite"></section>
@@ -517,7 +592,7 @@ const VIEWS = {
 
   <div class="grid-2">
     <section class="section">
-      <div class="section-head"><h2>Recent huddles</h2><a class="linkish small" href="/huddles">View all</a></div>
+      <div class="section-head"><h2>Recent huddles</h2>${manager ? '<a class="linkish small" href="/huddles">View all</a>' : ''}</div>
       <div class="panel flush"><div class="table-wrap"><table>
         <thead><tr><th>When</th><th>Channel</th><th class="num">Length</th><th class="num">People</th><th class="num">Points</th><th></th></tr></thead>
         <tbody id="recent-body"><tr><td colspan="6" class="empty-cell"><span class="skel" style="width:180px"></span></td></tr></tbody>
@@ -545,7 +620,8 @@ const VIEWS = {
   <footer class="foot">
     <span id="foot-updated">loading</span>
     <span id="foot-status">uptime, longest and average</span>
-  </footer>`,
+  </footer>`;
+  },
 
   huddles: () => `  <div class="page-head">
     <div>
@@ -606,7 +682,7 @@ const VIEWS = {
       <div class="desc">Everyone with a way into Orbit, and what they can do.</div>
     </div>
   </div>
-  <div class="kpis" style="grid-template-columns:repeat(4,1fr)">
+  <div class="kpis four">
     <div class="kpi"><div class="k">Owners</div><div class="v" id="u-owner">0</div></div>
     <div class="kpi"><div class="k">Managers</div><div class="v" id="u-manager">0</div></div>
     <div class="kpi"><div class="k">Members</div><div class="v" id="u-user">0</div></div>
@@ -705,6 +781,20 @@ const VIEWS = {
       </div>
     </aside>
   </div>`,
+  // A page for a section somebody cannot open. Without it the 403 branch asked
+  // for a view that does not exist, renderApp fell back to the dashboard, and a
+  // forbidden page rendered as a dead skeleton titled "Orbit · Orbit".
+  forbidden: () => `  <div class="page-head">
+    <div>
+      <p class="kicker">no access</p>
+      <h1>Not your section</h1>
+      <div class="desc">This page is for channel managers and the owner. Your own numbers are on the dashboard.</div>
+    </div>
+    <div class="actions"><a class="btn" href="/dashboard">Back to the dashboard</a></div>
+  </div>
+  <section class="section"><div class="panel" style="padding:20px">
+    <p class="muted">If you think you should be able to see this, ask whoever runs this Orbit to check your role.</p>
+  </div></section>`,
 };
 
 const APP_SCRIPT = `
@@ -873,61 +963,82 @@ async function initMyPoints(){
     '</ul>';
 }
 
+/** Column labels for the per channel switches, in column order. */
+const FLAG_LABELS = {
+  enabled: 'Tracking on',
+  auto_replies: 'Auto replies',
+  restrict_triggers: 'Only managers can start it',
+  condensed_review: 'Condensed review',
+  paused: 'Paused',
+};
+
 async function initDashboard(){
   const set = function (id, text) { const el = $(id); if (el) el.textContent = text; };
 
-  api('/api/overview').then(function (data) {
-    set('k-active', num.format(data.active));
-    set('k-24h', num.format(data.ended24h));
-    set('k-people', num.format(data.people));
-    set('k-points', num.format(data.points));
-    set('k-channels', num.format(data.channels));
-    const state = data.uptime.state;
-    const dot = $('state-dot');
-    if (dot) dot.className = 'dot ' + (state === 'ok' || state === 'operational' ? 'on' : '');
-    set('state-text', state);
-    set('foot-updated', 'updated ' + new Date(data.generatedAt).toISOString().slice(11, 19) + 'Z');
-    set('foot-status', 'up ' + dur(data.uptime.seconds) + ' · longest ' + (data.longestSeconds ? dur(data.longestSeconds) : 'none') + ' · average ' + (data.averageSeconds ? dur(data.averageSeconds) : 'none'));
-  }).catch(function () {});
+  // Every panel used to end in .catch(function () {}), so a failed request left
+  // the skeleton shimmering forever with no hint that anything was wrong.
+  const fail = function (id, colspan, message) {
+    const el = $(id);
+    if (!el) return;
+    if (colspan) el.innerHTML = '<tr><td colspan="' + colspan + '" class="empty-cell">' + esc(message) + '</td></tr>';
+    else el.innerHTML = '<li class="empty-cell">' + esc(message) + '</li>';
+  };
 
-  api('/api/leaderboard').then(function (data) {
-    $('board').innerHTML = boardRows(data.rows, data.viewer);
-    set('board-scope', data.rows.length + ' people');
-    const slot = $('optin-slot');
-    if (!slot) return;
-    if (!data.viewer || !data.viewer.signedIn) { slot.innerHTML = ''; return; }
-    slot.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding-bottom:10px;margin-bottom:4px;border-bottom:1px solid var(--line)">' +
-      '<span class="small muted">' + (data.viewer.isOwner ? 'You see every score' : 'Hide yourself from the board') + '</span>' +
-      '<label class="sw"><input type="checkbox" id="optin"' + (data.viewer.leaderboardOptIn ? ' checked' : '') + '><i></i></label></div>';
-    const input = $('optin');
-    if (input) input.addEventListener('change', function () {
-      api('/api/me/opt-in', { method: 'POST', body: JSON.stringify({ optedIn: input.checked }) })
-        .then(function () { initDashboard(); })
-        .catch(function () { input.checked = !input.checked; });
-    });
-  }).catch(function () {});
-
-  api('/api/huddles?limit=8').then(function (data) {
-    $('recent-body').innerHTML = huddleRows(data.huddles);
-  }).catch(function () {
-    const body = $('recent-body');
-    if (body) body.innerHTML = '<tr><td colspan="6" class="empty-cell">Could not load huddles.</td></tr>';
-  });
-
-  api('/api/channels').then(function (data) {
-    $('channels-body').innerHTML = channelRows(data.channels);
-    set('channels-tag', data.channels.length + ' channels');
-  }).catch(function () {});
-
-  setInterval(function () {
-    api('/api/overview').then(function (data) {
+  function loadOverview(){
+    return api('/api/overview').then(function (data) {
       set('k-active', num.format(data.active));
       set('k-24h', num.format(data.ended24h));
       set('k-people', num.format(data.people));
       set('k-points', num.format(data.points));
       set('k-channels', num.format(data.channels));
-    }).catch(function () {});
-  }, 10000);
+      const state = data.uptime.state;
+      const dot = $('state-dot');
+      if (dot) dot.className = 'dot ' + (state === 'ok' || state === 'operational' ? 'on' : '');
+      set('state-text', state);
+      set('foot-updated', 'updated ' + new Date(data.generatedAt).toISOString().slice(11, 19) + 'Z');
+      set('foot-status', 'up ' + dur(data.uptime.seconds) + ' · longest ' + (data.longestSeconds ? dur(data.longestSeconds) : 'none') + ' · average ' + (data.averageSeconds ? dur(data.averageSeconds) : 'none'));
+    }).catch(function () {
+      ['k-active', 'k-24h', 'k-people', 'k-points', 'k-channels'].forEach(function (id) { set(id, 'n/a'); });
+      set('state-text', 'offline');
+    });
+  }
+
+  function loadBoard(){
+    return api('/api/leaderboard').then(function (data) {
+      $('board').innerHTML = boardRows(data.rows, data.viewer);
+      set('board-scope', data.rows.length + ' people');
+      const slot = $('optin-slot');
+      if (!slot) return;
+      if (!data.viewer || !data.viewer.signedIn) { slot.innerHTML = ''; return; }
+      // The switch is on when you are on the board, so the label has to read as
+      // the thing the switch does, not its opposite.
+      slot.innerHTML = '<div class="optin-row">' +
+        '<span class="small muted">' + (data.viewer.isOwner ? 'You see every score' : 'Show me on the leaderboard') + '</span>' +
+        '<label class="sw"><input type="checkbox" id="optin" aria-label="Show me on the leaderboard"' + (data.viewer.leaderboardOptIn ? ' checked' : '') + '><i></i></label></div>';
+      const input = $('optin');
+      if (input) input.addEventListener('change', function () {
+        api('/api/me/opt-in', { method: 'POST', body: JSON.stringify({ optedIn: input.checked }) })
+          // Reload the board only. Calling initDashboard() here registered a
+          // second 10s poll on every toggle, so the page got slower each time.
+          .then(loadBoard)
+          .catch(function () { input.checked = !input.checked; });
+      });
+    }).catch(function () { fail('board', 0, 'Could not load the leaderboard.'); });
+  }
+
+  loadOverview();
+  loadBoard();
+
+  api('/api/huddles?limit=8').then(function (data) {
+    $('recent-body').innerHTML = huddleRows(data.huddles);
+  }).catch(function () { fail('recent-body', 6, 'Could not load huddles.'); });
+
+  api('/api/channels').then(function (data) {
+    $('channels-body').innerHTML = channelRows(data.channels);
+    set('channels-tag', data.channels.length + ' channels');
+  }).catch(function () { fail('channels-body', 6, 'Could not load channels.'); });
+
+  setInterval(loadOverview, 10000);
 }
 
 async function initHuddles(){
@@ -972,9 +1083,11 @@ async function initChannels(){
       }).join('');
       return '<tr data-channel="' + esc(c.channelId) + '">' +
         '<td><div class="stack"><span class="name">' + esc(c.name || c.channelId) + '</span><span class="sub mono">' + esc(c.channelId) + '</span></div></td>' +
-        ['enabled', 'auto_replies', 'restrict_triggers', 'condensed_review', 'paused'].map(function (flag) {
+        Object.keys(FLAG_LABELS).map(function (flag) {
           const checked = flag === 'paused' ? c.paused : c[flag] === true || c[flag] === 1 || c[flag] === '1' || c[flag];
-          return '<td><label class="sw"><input type="checkbox" data-flag="' + flag + '"' + (checked ? ' checked' : '') + '><i></i></label></td>';
+          // A bare switch with no name is a mystery to a screen reader.
+          return '<td><label class="sw"><input type="checkbox" data-flag="' + flag + '" aria-label="' +
+            esc((c.name || c.channelId) + ': ' + FLAG_LABELS[flag]) + '"' + (checked ? ' checked' : '') + '><i></i></label></td>';
         }).join('') +
         '<td><div class="chips">' + managers +
           '<input class="input" style="width:96px;height:24px;font-size:11px" placeholder="U0ABC123" data-add="' + esc(c.channelId) + '"></div></td>' +

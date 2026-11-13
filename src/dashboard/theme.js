@@ -59,17 +59,15 @@ const text = CTP.text;
  * pages are server rendered with no build step.
  */
 export const THEME_TOKENS = `:root{color-scheme:dark;
-  /* Catppuccin Mocha roles */
-  --ctp-rosewater:${CTP.rosewater};--ctp-mauve:${mauve};--ctp-lavender:${lavender};
-  --ctp-blue:${blue};--ctp-peach:${CTP.peach};--ctp-green:${CTP.green};
-  --ctp-yellow:${CTP.yellow};--ctp-red:${red};
-  --ctp-text:${text};--ctp-subtext1:${CTP.subtext1};--ctp-subtext0:${CTP.subtext0};
-  --ctp-crust:${CTP.crust};--ctp-surface0:${CTP.surface0};--ctp-surface1:${CTP.surface1};
+  /* Only the raw role that stylesheets actually reach for. Everything else is
+     exposed through the semantic names below, so there is one way to say a
+     colour. */
+  --ctp-crust:${CTP.crust};
 
   /* Surface roles. Base is the page, Mantle is a panel sunk into it, Surface0 is
      a raised row, input or knob. Borders are hairlines, not boxes. */
   --bg:${CTP.base};--surface:${CTP.mantle};--raised:${CTP.surface0};
-  --line:${CTP.surface0};--line-soft:${CTP.surface0};
+  --line:${CTP.surface0};
 
   /* Ink. Text for primary, Subtext1 for secondary, Subtext0 for hints. */
   --ink:${text};--ink-2:${CTP.subtext1};--ink-3:${CTP.subtext0};
@@ -78,24 +76,20 @@ export const THEME_TOKENS = `:root{color-scheme:dark;
      colour, and the rest are semantic only. */
   --accent:${mauve};--accent-bright:${lavender};
   --gold:${CTP.yellow};--bronze:${CTP.peach};--silver:${CTP.subtext1};--red:${red};
-  --green:${CTP.green};--blue:${blue};--rosewater:${CTP.rosewater};
+  --green:${CTP.green};--blue:${blue};
 
   /* Translucent surfaces, all derived from the palette above. */
   --tint:${alpha(mauve, 0.07)};--tint-2:${alpha(mauve, 0.12)};
   --ring:${alpha(mauve, 0.35)};--ring-strong:${alpha(mauve, 0.6)};
   --glow:${alpha(mauve, 0.1)};
-  --bar-top:${alpha(mauve, 0.9)};--bar-bottom:${alpha(mauve, 0.22)};
-  --blue-tint:${alpha(blue, 0.16)};--blue-ring:${alpha(blue, 0.3)};
   --red-tint:${alpha(red, 0.08)};--red-ring:${alpha(red, 0.3)};
-  --dot-halo:${alpha(CTP.subtext0, 0.18)};
   --hair:${alpha(lavender, 0.1)};
   --hair-strong:${alpha(lavender, 0.18)};
   --stage-top:${alpha(CTP.surface0, 0.34)};
   --stage-bottom:${alpha(CTP.mantle, 0.72)};
   --lift:0 26px 60px -34px ${alpha(CTP.crust, 0.9)};
   --lift-hover:0 30px 70px -30px ${alpha(CTP.crust, 0.95)};
-  --glass:${alpha(CTP.base, 0.88)};--scrim:${alpha(CTP.crust, 0.72)};--shadow:${alpha(CTP.crust, 0.6)};
-  --knob:${CTP.text};
+  --glass:${alpha(CTP.base, 0.88)};--shadow:${alpha(CTP.crust, 0.6)};
 
   --r:10px;--r-sm:6px;--r-lg:14px;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
