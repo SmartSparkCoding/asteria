@@ -33,7 +33,7 @@ export function renderRecapPage({ channel, submissions = [], error = '', notice 
   const items = submissions.length
     ? submissions
         .map(
-          (entry) => `<li class="sub">
+          (entry) => `<li class="moment">
   <p>${escapeHtml(entry.body)}</p>
   ${(entry.links || []).map((link) => `<a class="lnk" href="${escapeAttr(link)}" target="_blank" rel="noopener">${escapeHtml(link.replace(/^https:\/\//, ''))}</a>`).join(' ')}
   <span class="when">${escapeHtml(String(entry.created_at || '').slice(0, 16))}</span>
@@ -62,7 +62,7 @@ body{margin:0;min-height:100vh;color:var(--ink);font-family:var(--sans);font-siz
 main{max-width:760px;margin:0 auto;padding:clamp(22px,4vw,40px) clamp(16px,4vw,32px) 64px}
 .kicker{margin:0 0 8px;font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);font-weight:750}
 h1{margin:0 0 8px;font-size:clamp(26px,4vw,38px);letter-spacing:-.03em;line-height:1.05}
-.sub{color:var(--ink-3);margin:0 0 22px;max-width:60ch}
+.lede{color:var(--ink-3);margin:0 0 22px;max-width:60ch}
 .panel{background:linear-gradient(170deg,var(--stage-top),var(--stage-bottom));border-radius:18px;
   box-shadow:inset 0 0 0 1px var(--hair),var(--lift);padding:20px}
 label{display:block;font-size:12px;font-weight:650;color:var(--ink-2);margin:0 0 6px}
@@ -86,10 +86,10 @@ textarea:focus,input[type=text]:focus{outline:none;border-color:var(--accent)}
   font-size:13px;margin-bottom:16px}
 h2{font-size:10px;letter-spacing:.17em;text-transform:uppercase;color:var(--ink-3);margin:26px 0 10px;font-weight:750}
 .list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
-.sub{background:var(--surface);box-shadow:inset 0 0 0 1px var(--hair);border-radius:12px;padding:12px 14px}
-.sub p{margin:0 0 6px;font-size:13.5px}
-.sub .lnk{display:inline-block;font-family:var(--mono);font-size:11.5px;color:var(--accent-bright);margin-right:8px}
-.sub .when{display:block;font-size:11px;color:var(--ink-3);margin-top:6px}
+.moment{background:var(--surface);box-shadow:inset 0 0 0 1px var(--hair);border-radius:12px;padding:12px 14px}
+.moment p{margin:0 0 6px;font-size:13.5px}
+.moment .lnk{display:inline-block;font-family:var(--mono);font-size:11.5px;color:var(--accent-bright);margin-right:8px}
+.moment .when{display:block;font-size:11px;color:var(--ink-3);margin-top:6px}
 .none{color:var(--ink-3);font-size:13px}
 </style>
 </head>
@@ -100,7 +100,7 @@ h2{font-size:10px;letter-spacing:.17em;text-transform:uppercase;color:var(--ink-
 <main>
   <p class="kicker">orbit recaps</p>
   <h1>Recap #${escapeHtml(channel.name || channel.id)}</h1>
-  <p class="sub">Funny moments from this channel's huddles. Paste the moment, and link your own messages if you have them. Submitted to the channel admins for a recap.</p>
+  <p class="lede">Funny moments from this channel's huddles. Paste the moment, and link your own messages if you have them. Submitted to the channel admins for a recap.</p>
   ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
   ${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ''}
   <section class="panel">

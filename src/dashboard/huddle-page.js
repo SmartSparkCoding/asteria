@@ -83,6 +83,18 @@ td.num,th.num{text-align:right;font-family:var(--mono);font-size:13px;white-spac
 .reason{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);background:var(--raised);
   border-radius:999px;padding:2px 7px;box-shadow:0 0 0 1px var(--line)}
 .reason b{color:var(--accent-bright);font-weight:600;margin-left:4px}
+.muted{color:var(--ink-3)}
+/* On a phone the four columns do not fit, so the table tightens up and the
+   position column goes. The row order already says who placed where. */
+@media (max-width:560px){
+  th,td{padding:9px 10px}
+  table{font-size:13px}
+  th.rank,td.rank{display:none}
+  .reason{font-size:10px}
+}
+/* The reason chips make this table wider than a phone. Scroll it rather than
+   letting the page itself scroll sideways. */
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:var(--r)}
 .empty{background:var(--surface);border-radius:var(--r);padding:20px 16px;box-shadow:0 0 0 1px var(--line);
   color:var(--ink-3);font-size:13.5px}
 .note{font-size:12.5px;color:var(--ink-3);background:var(--surface);border-radius:var(--r);padding:12px 14px;
@@ -205,19 +217,28 @@ export function renderHuddlePage(view) {
   ];
 
   const longestStretch = Math.max(0, ...participants.map((participant) => participant.provableSeconds || 0));
+  // The rows are sorted by points, so the medal cannot come from the row number.
+  // Nobody set `longest` on this view, which left the highlight dead and gave the
+  // medals to whoever happened to score highest.
+  const longestId =
+    longestStretch > 0
+      ? participants.find((participant) => (participant.provableSeconds || 0) === longestStretch)?.userId
+      : null;
+  const isLongest = (participant) => Boolean(longestId) && participant.userId === longestId;
   const rows = participants
     .map((participant, index) => {
-      const medal = participant.longest
-        ? ' var(--gold)'
-        : index === 0
+      const medal =
+        participant.longest || isLongest(participant)
           ? 'var(--gold)'
-          : index === 1
-            ? 'var(--bronze)'
-            : index === 2
-              ? 'var(--silver)'
-              : 'var(--ink-3)';
+          : index === 0
+            ? 'var(--gold)'
+            : index === 1
+              ? 'var(--bronze)'
+              : index === 2
+                ? 'var(--silver)'
+                : 'var(--ink-3)';
       const reasons = reasonChips(participant.reasons || []);
-      return `<tr${participant.longest ? ' class="longest"' : ''}>
+      return `<tr${participant.longest || isLongest(participant) ? ' class="longest"' : ''}>
 <td class="rank" style="color:${medal}">${index + 1}</td>
 <td>${personCell(participant.name, participant.avatarUrl)}${reasons ? `<div class="reasons">${reasons}</div>` : ''}${
         longestStretch > 0
@@ -292,12 +313,12 @@ ${facts
   <h2>Everyone in the huddle</h2>
   ${
     participants.length
-      ? `<table>
+      ? `<div class="table-wrap"><table>
 <thead><tr><th class="rank">#</th><th>Person</th><th class="num">In the call</th><th class="num">Points</th></tr></thead>
 <tbody>
 ${rows}
 </tbody>
-</table>`
+</table></div>`
       : '<div class="empty">Nobody was recorded in this huddle.</div>'
   }
 

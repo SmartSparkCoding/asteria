@@ -559,12 +559,16 @@ describe('dashboard server', () => {
     }
   });
 
-  it('sends /login home when the app has no oauth client', async () => {
+  it('sends /login home with an explanation when the app has no oauth client', async () => {
     const harness = await startDashboard();
     try {
       const response = await fetch(`${harness.base}/login`, { redirect: 'manual' });
       assert.equal(response.status, 302);
-      assert.equal(response.headers.get('location'), '/');
+      // The landing page has to say why, otherwise the button looks broken.
+      assert.equal(response.headers.get('location'), '/?notice=dm-link');
+      const landing = await fetch(`${harness.base}/?notice=dm-link`);
+      const html = await landing.text();
+      assert.match(html, /DM the bot and it will send you a link/);
     } finally {
       await harness.stop();
     }

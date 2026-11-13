@@ -392,8 +392,43 @@ export function createHuddleTracker({
     }
   }
 
+  /**
+   * Can this huddle be scored at all: is it in a channel the bot is in?
+   *
+   * Three answers, not two. `unknown` means the membership lookup itself failed
+   * (rate limit, Slack hiccup), which is not the same as "the bot is not in that
+   * channel" and must never be treated as one.
+   */
+  async function verifyHuddleChannel(huddle) {
+    if (!botChannels) {
+      return 'yes';
+    }
+    if (!huddle?.channel_id) {
+      return 'no';
+    }
+    const channelIds = await botChannels.list({ includeDms: true });
+    if (channelIds.length === 0) {
+      return 'unknown';
+    }
+    return channelIds.includes(huddle.channel_id) ? 'yes' : 'no';
+  }
+
   async function finalizeHuddle(callId, endedAt) {
-    const wasOptedOut = store.getHuddle(callId)?.status === 'opted_out';
+    const existing = store.getHuddle(callId);
+    if (!existing) {
+      return;
+    }
+    const wasOptedOut = existing.status === 'opted_out';
+    // Membership is checked before the end is written down. It used to be
+    // checked after, so a rate limited `conversations.list` answered "no
+    // channels", the huddle was already marked ended, and nothing ever scored
+    // it again. Leaving it active means the next sweep simply tries again.
+    if (!wasOptedOut && (await verifyHuddleChannel(existing)) === 'unknown') {
+      logger.warn?.(
+        `Could not verify which channels the bot is in; leaving huddle ${callId} open to score on the next pass`,
+      );
+      return;
+    }
     if (!store.setHuddleStatus(callId, 'ended', endedAt)) {
       return;
     }
@@ -448,33 +483,25 @@ export function createHuddleTracker({
     if (!huddle?.started_at || !huddle?.ended_at) {
       return;
     }
-    // The bot sees huddle presence events workspace-wide, so most of the huddles it
-    // records happen in channels it was never in. A huddle only counts when we can
-    // prove the bot was inside it — a channel or DM the bot is a member of. Huddles
-    // with no channel at all are unprovable, so they are dropped.
-    if (botChannels) {
-      const channelIds = await botChannels.list({ includeDms: true });
-      if (!huddle.channel_id) {
-        logger.debug?.(`Skipping points for huddle ${huddle.call_id}: no channel to verify`);
-        return;
-      }
-      if (!channelIds.includes(huddle.channel_id)) {
-        if (channelIds.length === 0) {
-          logger.error(`Could not verify which channels the bot is in; skipping points for huddle ${huddle.call_id}`);
-        } else {
-          logger.info(`Skipping points for huddle ${huddle.call_id}: the bot is not in ${huddle.channel_id}`);
-        }
-        return;
-      }
-    }
+    // Membership was already checked by finalizeHuddle, which refuses to end a
+    // huddle it could not verify. Nothing to re-check here.
     const members = store.listHuddleMembers(huddle.call_id);
     if (members.length === 0) {
       return;
     }
-    // Anyone still flagged as inside when the call ends has their interval
-    // closed at the end time we were told about, which is the most generous
-    // reading we can defend. computeHuddleAttendance still marks the huddle
-    // partial so points never quietly depend on the guess.
+    // Close every open interval at the last moment we actually saw that person
+    // inside. That is a floor we can defend, and it is the only thing that
+    // scores: closing at the huddle's end time instead credits time nobody
+    // witnessed, and marking that as inferred scored the whole stretch zero,
+    // which is how somebody who stayed to the end ended up with no points at
+    // all. Anything with no observation to close on is bounded by the end time
+    // and marked inferred, so it counts as a ceiling and never as a score.
+    for (const member of members) {
+      const lastSeen = Number(member.last_seen_at) || 0;
+      if (lastSeen > 0) {
+        store.closeHuddleAttendance(huddle.call_id, member.user_id, Math.min(lastSeen, huddle.ended_at));
+      }
+    }
     store.closeAllOpenHuddleAttendance(huddle.call_id, huddle.ended_at);
     const attendance = store.computeHuddleAttendance(huddle.call_id, {
       startedAt: huddle.started_at,
@@ -510,12 +537,11 @@ export function createHuddleTracker({
         channelId: huddle.channel_id || '',
       });
     }
-    for (const [userId, entry] of awards) {
-      store.awardHuddlePoints(userId, entry.points, huddle.channel_id || '');
-    }
-    // The running totals above cannot answer "why does this person have 808
-    // points", and a huddle's own page needs the per-person reasons. Keep them.
-    store.saveHuddleAwards(huddle.call_id, huddle.channel_id || '', awards);
+    // Replace, do not add. A huddle can be re-tracked and ended again, and the
+    // second pass may award a different total; adding unconditionally paid the
+    // whole huddle twice. replaceHuddleAwards moves the leaderboard by the
+    // difference from what this huddle was last awarded, so it is idempotent.
+    store.replaceHuddleAwards(huddle.call_id, huddle.channel_id || '', awards);
     // One line per finished huddle saying how much of it was actually witnessed.
     // Without it, "why is my time wrong" can only be answered by reading the
     // database by hand, and the honest answer (this is a floor) never appears.
@@ -530,8 +556,11 @@ export function createHuddleTracker({
     return awards;
   }
 
-  async function applyJoin(userId, callId) {
-    const joinedAt = nowEpochSeconds();
+  async function applyJoin(userId, callId, joinedAtOverride = 0) {
+    // A replayed join passes the moment the state was written, so somebody who
+    // joined while the huddle was still an unverified placeholder is credited
+    // from when they actually arrived rather than from the replay.
+    const joinedAt = Number(joinedAtOverride) > 0 ? Number(joinedAtOverride) : nowEpochSeconds();
     const known = store.getHuddle(callId);
     if (known && !known.channel_id) {
       // A placeholder for a huddle whose channel we have not confirmed yet.
@@ -579,18 +608,22 @@ export function createHuddleTracker({
 
   async function applyLeave(userId, callId) {
     const known = store.getHuddle(callId);
+    const leftAt = nowEpochSeconds();
+    // The live state is cleared first, whatever else we know. A leave that
+    // arrived while the huddle was still an unverified placeholder used to be
+    // dropped entirely, which left the person flagged as inside and got them
+    // replayed as a fresh join once the channel was confirmed.
+    store.setUserHuddleState({ userId, callId: '', isIn: false });
     if (!known?.channel_id) {
       return;
     }
-    const leftAt = nowEpochSeconds();
-    store.setUserHuddleState({ userId, callId: '', isIn: false });
     store.closeHuddleAttendance(callId, userId, leftAt);
     store.upsertHuddleMember({ callId, userId, firstSeenAt: null, lastSeenAt: leftAt, isIn: false });
     store.recordTriggerLog({
       userId,
       action: 'huddle_leave',
       detail: callId,
-      channelId: store.getHuddle(callId)?.channel_id || '',
+      channelId: known.channel_id || '',
     });
   }
 
@@ -735,6 +768,9 @@ export function createHuddleTracker({
         if (lastSeen <= 0 || lastSeen < joinedAt) {
           continue;
         }
+        // Closed at the last moment somebody was seen inside, which is a floor
+        // we can defend, so it stays proven. Only an end time we invented (the
+        // huddle's own date_end) is marked inferred.
         store.closeHuddleAttendance(callId, userId, lastSeen);
         store.setHuddleMemberPresence(callId, userId, false);
         const state = store.getUserHuddleState(userId);
@@ -832,8 +868,8 @@ export function createHuddleTracker({
       // The replay is deliberately kept: it is the only record of when somebody
       // joined who has since gone quiet.
       store.setHuddleStatus(room.id, 'active', null);
-      for (const row of store.listUsersInHuddle(room.id)) {
-        await applyJoin(row.user_id, room.id);
+      for (const row of store.listUsersInHuddleSince(room.id)) {
+        await applyJoin(row.user_id, room.id, row.since);
       }
     }
     // Now the roster itself. `participant_history` is written as roster only,
@@ -888,13 +924,12 @@ export function createHuddleTracker({
       // This is the last resort for huddles older than the stale window, and it
       // used to record the end as start-plus-twelve-hours, which is how huddles
       // that genuinely lasted a few minutes ended up displayed as 12h. Ask Slack
-      // for the real end time, and only fall back to the window if it cannot say.
+      // for the real end time, and only fall back to the last moment anybody was
+      // seen inside, which is a bound we can actually defend.
       const room = await fetchRoomState(huddle);
       const endedAt = Number(room?.date_end) || 0;
-      await finalizeHuddle(
-        huddle.call_id,
-        endedAt > huddle.started_at ? endedAt : huddle.started_at + STALE_HUDDLE_SECONDS,
-      );
+      const lastActivity = Math.max(store.lastHuddleActivityAt(huddle.call_id) || 0, huddle.started_at + 1);
+      await finalizeHuddle(huddle.call_id, endedAt > huddle.started_at ? endedAt : lastActivity);
     }
   }
 
@@ -1548,9 +1583,18 @@ export function createHuddleTracker({
 
   async function generateReview({ huddle, recipientUserId, actionClient }) {
     const members = store.listHuddleMembers(huddle.call_id);
+    // The review has to read the same intervals the points did. Without this it
+    // fell back to the legacy first-seen/last-seen span, which is the exact
+    // overcount the interval maths exists to remove: a 58 second appearance in
+    // a 40 minute call was reported as 40 minutes.
+    const attendance = store.computeHuddleAttendance(huddle.call_id, {
+      startedAt: huddle.started_at,
+      endedAt: huddle.ended_at,
+    });
     const stats = computeHuddleStats({
       huddle,
       members,
+      attendance,
       participantHistory: parseParticipantHistory(huddle),
     });
 

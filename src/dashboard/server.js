@@ -14,9 +14,8 @@ import { renderHuddlePage } from './huddle-page.js';
 import { resolvePermissions } from './permissions.js';
 import { isLegacyHost, renderRebrandPage } from './rebrand.js';
 import { channelSlug, parseRecapLink, renderRecapPage } from './recap.js';
-import { renderApp, renderLanding } from './site.js';
+import { LANDING_NOTICES, renderApp, renderErrorPage, renderLanding } from './site.js';
 import { buildDashboardStats } from './stats.js';
-import { ORBIT_FAVICON } from './theme.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SESSION_COOKIE = 'asteria_session';
@@ -374,18 +373,12 @@ export function createDashboardServer({
   }
 
   function renderHuddleNotFound() {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow,noarchive">
-<title>Not found · Jacob's Orbit</title>
-<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(ORBIT_FAVICON)}" type="image/svg+xml">
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d1117;color:#c9d1d9;
-font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;text-align:center;padding:24px}
-a{color:#2ea043}h1{color:#f0f6fc;font-size:20px;margin:0 0 8px}p{margin:0;font-size:14px}</style>
-</head><body><div><h1>No such huddle</h1>
-<p>If this is your huddle, <a href="/login">sign in with Slack</a> and try again.</p>
-<p style="margin-top:14px;font-size:13px;color:#8b949e">Huddle pages are only visible to Orbit's owner and to
-people who were in the huddle.</p></div></body></html>`;
+    return renderErrorPage({
+      title: 'No such huddle',
+      heading: 'No such huddle',
+      body: `<p>If this is your huddle, <a href="/login">sign in with Slack</a> and try again.</p>
+<p class="small muted">Huddle pages are only visible to Orbit's owner and to people who were in the huddle.</p>`,
+    });
   }
 
   /**
@@ -656,7 +649,7 @@ people who were in the huddle.</p></div></body></html>`;
     for await (const chunk of req) {
       size += chunk.length;
       if (size > limitBytes) {
-        throw new Error('Request body too large');
+        throw badRequest('Request body too large');
       }
       chunks.push(chunk);
     }
@@ -666,12 +659,23 @@ people who were in the huddle.</p></div></body></html>`;
     try {
       return JSON.parse(Buffer.concat(chunks).toString('utf8'));
     } catch {
-      throw new Error('Body must be JSON');
+      throw badRequest('Body must be JSON');
     }
   }
 
   const server = http.createServer((req, res) => {
     handle(req, res).catch((error) => {
+      // A malformed request is the caller's problem, not ours. It used to fall
+      // through to the generic handler and answer 500 "Something broke on our
+      // side", which hid the real cause from whoever sent it.
+      if (error?.status === 400) {
+        if (!res.headersSent) {
+          sendJson(res, 400, { error: error.message });
+        } else {
+          res.end();
+        }
+        return;
+      }
       logger.error?.('[dashboard] request failed', error);
       if (!res.headersSent) {
         sendJson(res, 500, { error: 'Something broke on our side.' });
@@ -723,8 +727,10 @@ people who were in the huddle.</p></div></body></html>`;
 
     if (route === '/login') {
       if (!auth.oauthConfigured) {
-        // Slack sign-in is the only way in now, so there is nothing to send them to.
-        redirect(res, '/');
+        // Slack OAuth is not configured, so the only way in is the sign in link
+        // the bot DMs. Say that on the landing page rather than bouncing back to
+        // a page with no explanation.
+        redirect(res, '/?notice=dm-link');
         return;
       }
       const state = auth.randomState();
@@ -756,7 +762,7 @@ people who were in the huddle.</p></div></body></html>`;
       const expected = cookies.asteria_oauth_state;
       const expectedNonce = cookies.asteria_oauth_nonce || '';
       if (!expected || state !== expected) {
-        sendHtml(res, 400, renderLanding({ signedIn: Boolean(readSession(req)) }));
+        sendHtml(res, 400, renderLanding({ signedIn: Boolean(readSession(req)), notice: LANDING_NOTICES.expired }));
         return;
       }
       try {
@@ -983,10 +989,16 @@ people who were in the huddle.</p></div></body></html>`;
           : {};
       const now = Math.floor(Date.now() / 1000);
       const scoped = huddles.filter((huddle) => visibleChannelIds.includes(huddle.channelId));
-      const channels = [...new Set(scoped.map((huddle) => huddle.channelId))].map((id) => ({
-        id,
-        name: names[id] || id,
-      }));
+      // Build the filter from every channel that has huddles, not just the ones
+      // that happen to be on this page of results.
+      const allChannelIds = store
+        .listHuddleChannelIds({ channelIds: visibleChannelIds })
+        .filter((id) => visibleChannelIds.includes(id));
+      const allNames =
+        allChannelIds.length && typeof botChannels.names === 'function'
+          ? await botChannels.names(allChannelIds).catch(() => names)
+          : names;
+      const channels = allChannelIds.map((id) => ({ id, name: allNames[id] || names[id] || id }));
       sendJson(res, 200, {
         total,
         channels,
@@ -1154,7 +1166,10 @@ people who were in the huddle.</p></div></body></html>`;
     }
 
     if (route === '/' && method === 'GET') {
-      sendHtml(res, 200, renderLanding({ signedIn: Boolean(auth_) }));
+      // Pick the message off the query string so a failed sign in says so
+      // instead of dropping the person back on a page that looks untouched.
+      const code = url.searchParams.get('notice') || url.searchParams.get('error') || '';
+      sendHtml(res, 200, renderLanding({ signedIn: Boolean(auth_), notice: LANDING_NOTICES[code] || '' }));
       return;
     }
 
@@ -1285,7 +1300,7 @@ people who were in the huddle.</p></div></body></html>`;
             displayRole: auth_.permissions.fakeAdmin ? 'owner' : auth_.permissions.role,
             isAdminViewer: isAdminViewer(auth_),
             baseUrl: '',
-            view: 'home',
+            view: 'forbidden',
           }),
         );
         return;
@@ -1519,6 +1534,11 @@ people who were in the huddle.</p></div></body></html>`;
       return;
     }
 
+    // A browser asking for a page that does not exist gets a page, not JSON.
+    if (wantsHtml(req)) {
+      sendHtml(res, 404, renderErrorPage({ title: 'Not found', heading: 'Nothing here' }));
+      return;
+    }
     sendJson(res, 404, { error: 'Not found' });
   }
 
@@ -1542,6 +1562,21 @@ people who were in the huddle.</p></div></body></html>`;
   };
 }
 
+/**
+ * True when the caller is a browser navigating to a page rather than a script
+ * calling the API. Used to decide whether an error should be HTML or JSON.
+ */
+function wantsHtml(req) {
+  const accept = String(req.headers?.accept || '');
+  return accept.includes('text/html');
+}
+
+function badRequest(message) {
+  const error = new Error(message);
+  error.status = 400;
+  return error;
+}
+
 function parseCookies(header) {
   const out = {};
   for (const part of String(header).split(';')) {
@@ -1549,7 +1584,17 @@ function parseCookies(header) {
     if (index === -1) {
       continue;
     }
-    out[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1).trim());
+    // A cookie value is attacker controlled, and a stray "%" made
+    // decodeURIComponent throw, which turned every request from that browser
+    // into a 500 until the cookie was cleared. Fall back to the raw value.
+    const raw = part.slice(index + 1).trim();
+    let value = raw;
+    try {
+      value = decodeURIComponent(raw);
+    } catch {
+      value = raw;
+    }
+    out[part.slice(0, index).trim()] = value;
   }
   return out;
 }

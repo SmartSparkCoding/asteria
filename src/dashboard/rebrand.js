@@ -31,7 +31,11 @@ export function isLegacyHost(hostHeader) {
  * ignored.
  */
 export function renderRebrandPage({ path = '/', search = '' } = {}) {
-  const target = `${SITE}${path === '/' ? '/' : path}${search}`;
+  // Only ever a path on our own host. `//evil.example` would otherwise become a
+  // protocol relative link, and the query string is whatever the visitor sent.
+  const safePath = String(path || '/').startsWith('/') && !String(path).startsWith('//') ? String(path) : '/';
+  const safeSearch = String(search || '').startsWith('?') ? String(search) : '';
+  const target = `${SITE}${safePath === '/' ? '/' : safePath}${safeSearch}`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -77,7 +81,7 @@ p.small{margin:18px 0 0;font-size:12.5px;color:var(--ink-3)}
 </main>
 <script>
 (function () {
-  var target = ${JSON.stringify(target)};
+  var target = ${jsonScript(target)};
   var el = document.getElementById('count');
   var left = 10;
   setInterval(function () {
@@ -89,6 +93,20 @@ p.small{margin:18px 0 0;font-size:12.5px;color:var(--ink-3)}
 </script>
 </body>
 </html>`;
+}
+
+/**
+ * JSON for embedding inside a <script>. Plain JSON.stringify lets a `</script>`
+ * in the value close the tag early, which turned the query string into an
+ * injection point.
+ */
+function jsonScript(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 function escapeAttr(value) {

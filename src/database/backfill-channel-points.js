@@ -22,16 +22,24 @@ export function backfillChannelPoints(store, { logger, force = false } = {}) {
   if (!force && !(before.lifetime > 0 && before.rows === 0)) {
     return null;
   }
-  const result = store.rebuildHuddleChannelPoints((huddle, members) =>
-    computeHuddlePoints({
+  const result = store.rebuildHuddleChannelPoints((huddle, members) => {
+    // Pass the stored intervals, never the first_seen/last_seen span. Without
+    // attendance computeHuddlePoints falls back to that span, so every boot put
+    // the pre-interval overcount straight back into the per-channel totals.
+    const attendance = store.computeHuddleAttendance(huddle.call_id, {
+      startedAt: huddle.started_at,
+      endedAt: huddle.ended_at,
+    });
+    return computeHuddlePoints({
       huddle,
       members,
+      attendance,
       participantHistory: parseParticipantHistory(huddle),
       // deliberately omitted: messageStats are not persisted, so they cannot be
       // recomputed. See the note above.
       messageStats: null,
-    }),
-  );
+    });
+  });
   const after = store.huddlePointTotals();
   logger?.info?.(
     `Attributed huddle points to channels: ${result.rows} row(s) across ${result.huddles} huddle(s), ` +
