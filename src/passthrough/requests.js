@@ -384,6 +384,35 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
   const slack = client || app.client;
 
   /**
+   * Inviting someone needs the bot to be in the channel itself, and needs the
+   * manage scopes on the installed token. Say so at boot rather than only when
+   * an owner presses Approve and nothing happens.
+   */
+  async function checkPassthroughChannels() {
+    let channels = [];
+    try {
+      channels = store.listPassthroughChannels().filter((channel) => channel.enabled);
+    } catch (error) {
+      logger.warn(`Could not read the pass-through channels: ${error?.message || error}`);
+      return;
+    }
+    for (const channel of channels) {
+      try {
+        const info = await slack.conversations.info({ channel: channel.channel_id });
+        if (!info?.channel?.is_member) {
+          logger.warn(
+            `Pass-through channel ${channel.channel_id}: I am not a member, so I cannot invite anyone into it. Invite me there.`,
+          );
+        }
+      } catch (error) {
+        logger.warn(
+          `Pass-through channel ${channel.channel_id}: could not check my membership (${error?.data?.error || error?.message || error}).`,
+        );
+      }
+    }
+  }
+
+  /**
    * Slack answers `invalid_blocks` for the whole message over one stray control
    * character or one over-long section, which used to leave a request announced
    * with a half-built thread. Log the payload, then post the same words as plain
@@ -749,10 +778,14 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
       } catch (error) {
         logger.error(`Could not invite a passthrough user: ${error?.message || error}`);
         const code = error?.data?.error || error?.message || 'unknown error';
-        const hint =
-          code === 'missing_scope'
-            ? 'I need the `channels:manage` and `groups:write` scopes, then a reinstall.'
-            : 'Invite them by hand, or give me the scope to do it.';
+        const hints = {
+          missing_scope: 'I need the `channels:manage` and `groups:write` scopes, then a reinstall.',
+          not_in_channel: `I am not in <#${request.channel_id}> myself, so I cannot invite anyone into it. Invite me there first.`,
+          cant_invite_self: 'That is me, not a person.',
+          cant_invite: 'Slack will not let me invite them, usually because they are a guest or an outside account.',
+          is_archived: 'That channel is archived.',
+        };
+        const hint = hints[code] || 'Invite them by hand, or give me the scope to do it.';
         await slack.chat.postMessage({
           channel: request.main_channel_id,
           thread_ts: request.thread_ts || request.message_ts,
@@ -856,6 +889,10 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
     }
     store.recordPassthroughVote(request.id, event.user, '');
     await refreshVoteMessage(request.id);
+  });
+
+  checkPassthroughChannels().catch((error) => {
+    logger.warn(`Pass-through membership check failed: ${error?.message || error}`);
   });
 }
 
