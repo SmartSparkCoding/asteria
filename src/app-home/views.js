@@ -23,6 +23,7 @@ const SUB_TABS = {
     { id: 'welcomer', label: 'Welcomer' },
     { id: 'home-assistant', label: 'Home Assistant' },
     { id: 'sync', label: 'Sync' },
+    { id: 'passthrough', label: 'Pass-through' },
     { id: 'settings', label: 'Settings' },
     { id: 'delete', label: 'Delete' },
   ],
@@ -1320,6 +1321,104 @@ export function buildDeleteView({ notice, navigation }) {
   };
 }
 
+export function buildPassthroughView({ channels = [], requests = [], notice, navigation }) {
+  const open = (requests || []).filter((request) => request.status === 'open').slice(0, 10);
+  const configured = channels || [];
+
+  const channelBlocks = configured.flatMap((channel) => {
+    const questions = channel.questions || [];
+    const questionLine =
+      questions.length === 0 ? '_no questions yet_' : questions.map((question) => question.label).join(' · ');
+    const posted = channel.anchor_ts ? 'button posted' : 'button not posted yet';
+    return [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*<#${channel.channel_id}>*${channel.label ? ` · ${channel.label}` : ''}\n${questionLine}\n_${questions.length} question${questions.length === 1 ? '' : 's'} · ${posted}${channel.main_channel_id ? ` · announced in <#${channel.main_channel_id}>` : ''}_`,
+        },
+      },
+      buildActionRow(
+        [
+          {
+            type: 'button',
+            action_id: `passthrough_edit_${channel.channel_id}`,
+            text: { type: 'plain_text', text: 'Edit form' },
+            value: channel.channel_id,
+          },
+          {
+            type: 'button',
+            action_id: `passthrough_post_${channel.channel_id}`,
+            text: { type: 'plain_text', text: channel.anchor_ts ? 'Repost button' : 'Post button' },
+            value: channel.channel_id,
+          },
+          {
+            type: 'button',
+            action_id: `passthrough_remove_${channel.channel_id}`,
+            text: { type: 'plain_text', text: 'Remove' },
+            value: channel.channel_id,
+            style: 'danger',
+          },
+        ],
+        `passthrough_actions_${channel.channel_id}`,
+      ),
+    ];
+  });
+
+  return {
+    type: 'home',
+    callback_id: 'asteria_home_passthrough',
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: 'Orbit Pass-through' } },
+      ...buildBanner(notice),
+      ...(navigation ?? []),
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'Channels people can ask to be let into. I post a button in the channel, they fill in your form, and the request lands in the main channel with the answers and an anonymous yes/no vote in the thread. You approve or deny it.',
+        },
+      },
+      buildActionRow(
+        [
+          {
+            type: 'button',
+            action_id: 'passthrough_add',
+            text: { type: 'plain_text', text: 'Add a pass-through channel' },
+            style: 'primary',
+          },
+        ],
+        'passthrough_add_actions',
+      ),
+      { type: 'divider' },
+      ...(channelBlocks.length > 0
+        ? channelBlocks
+        : [
+            {
+              type: 'section',
+              text: { type: 'mrkdwn', text: '_No pass-through channels yet._' },
+            },
+          ]),
+      ...(open.length > 0
+        ? [
+            { type: 'divider' },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*Open requests (${open.length})*\n${open
+                  .map(
+                    (request) => `· <@${request.user_id}> for <#${request.channel_id}> · ${request.created_at || ''}`,
+                  )
+                  .join('\n')}`,
+              },
+            },
+          ]
+        : []),
+    ],
+  };
+}
+
 export function buildHomeView({
   category,
   sub,
@@ -1334,6 +1433,8 @@ export function buildHomeView({
   huddles,
   huddleChannels,
   availableChannels,
+  passthroughChannels,
+  passthroughRequests,
   leaderboard,
   logs,
   baseUrl = '',
@@ -1397,6 +1498,17 @@ export function buildHomeView({
     }
     if (activeSub === 'sync') {
       return buildSyncView({ settings: syncSettings || {}, notice, isOwner, navigation });
+    }
+    if (activeSub === 'passthrough') {
+      if (!isOwner) {
+        return buildLeaderboardView({ leaderboard: leaderboard || [], notice, navigation });
+      }
+      return buildPassthroughView({
+        channels: passthroughChannels || [],
+        requests: passthroughRequests || [],
+        notice,
+        navigation,
+      });
     }
     if (activeSub === 'settings') {
       return buildSettingsView({ settings, notice, navigation });

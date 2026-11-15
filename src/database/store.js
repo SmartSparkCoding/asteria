@@ -205,6 +205,59 @@ function parseOwnerIds(value) {
   }
 }
 
+/**
+ * A pass-through question is { id, label, required }. Ids are positional
+ * (`q1`, `q2`, …) and assigned when the owner saves the form, so a question can
+ * be reworded without orphaning the answers people already sent.
+ */
+function normalizePassthroughQuestions(questions) {
+  if (!Array.isArray(questions)) {
+    return [];
+  }
+  return questions
+    .map((entry, index) => {
+      const label = typeof entry === 'string' ? entry : entry?.label;
+      if (typeof label !== 'string' || !label.trim()) {
+        return null;
+      }
+      return {
+        id: typeof entry === 'object' && typeof entry.id === 'string' && entry.id ? entry.id : `q${index + 1}`,
+        label: label.trim().slice(0, 150),
+        required: typeof entry === 'object' ? Boolean(entry.required) : false,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 10);
+}
+
+function parsePassthroughQuestions(value) {
+  if (Array.isArray(value)) {
+    return normalizePassthroughQuestions(value);
+  }
+  try {
+    return normalizePassthroughQuestions(JSON.parse(value ?? '[]'));
+  } catch {
+    return [];
+  }
+}
+
+function parsePassthroughAnswers(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  try {
+    const parsed = JSON.parse(value ?? '[]');
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((entry) => entry && typeof entry.question === 'string')
+      .map((entry) => ({ question: entry.question, answer: String(entry.answer ?? '') }));
+  } catch {
+    return [];
+  }
+}
+
 function normalizeParams(params) {
   return Object.fromEntries(
     Object.entries(params).map(([key, value]) => {
@@ -507,6 +560,55 @@ export async function createStore(databasePath, options = {}) {
       detail TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- A channel people can ask to be let into, plus the questions they have to
+    -- answer first. The questions live here rather than in app_settings because
+    -- every channel gets its own form, and the owner edits them one at a time.
+    CREATE TABLE IF NOT EXISTS passthrough_channels (
+      channel_id TEXT PRIMARY KEY,
+      label TEXT NOT NULL DEFAULT '',
+      -- JSON array of { id, label, required }. Kept as JSON because a form is
+      -- read and written whole, never queried by question.
+      questions TEXT NOT NULL DEFAULT '[]',
+      -- Where a request is announced. Empty means the personal channel.
+      main_channel_id TEXT NOT NULL DEFAULT '',
+      -- The message carrying the "request access" button, so it can be edited
+      -- in place instead of piling up a new one every time the owner saves.
+      anchor_ts TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS passthrough_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      -- JSON array of { question, answer }, in the order the form asked them.
+      answers TEXT NOT NULL DEFAULT '[]',
+      main_channel_id TEXT NOT NULL DEFAULT '',
+      -- The announcement in the main channel, and the thread under it.
+      message_ts TEXT NOT NULL DEFAULT '',
+      thread_ts TEXT NOT NULL DEFAULT '',
+      -- The message carrying the two vote reactions.
+      vote_ts TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Who voted is stored so nobody can vote twice, and never rendered: the
+    -- tally is the only thing that leaves this table.
+    CREATE TABLE IF NOT EXISTS passthrough_votes (
+      request_id INTEGER NOT NULL,
+      user_id TEXT NOT NULL,
+      vote TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (request_id, user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_passthrough_requests_thread ON passthrough_requests(thread_ts);
+    CREATE INDEX IF NOT EXISTS idx_passthrough_requests_channel ON passthrough_requests(channel_id);
+    CREATE INDEX IF NOT EXISTS idx_passthrough_votes_request ON passthrough_votes(request_id);
   `);
 
   const existingSettingColumns = bindAndFetchAll(database, 'PRAGMA table_info(app_settings)').map(
@@ -2041,6 +2143,219 @@ export async function createStore(databasePath, options = {}) {
 
     listHuddleChannels() {
       return bindAndFetchAll(database, 'SELECT * FROM huddle_channels ORDER BY channel_id');
+    },
+
+    // ---- Pass-through channels -------------------------------------------------
+    //
+    // A pass-through channel is one people can ask to be let into. The owner
+    // writes the questions once; every request is a form, an announcement in the
+    // main channel, and a vote in the thread under it.
+
+    listPassthroughChannels() {
+      return bindAndFetchAll(
+        database,
+        'SELECT * FROM passthrough_channels ORDER BY created_at ASC, channel_id ASC',
+      ).map((row) => ({ ...row, questions: parsePassthroughQuestions(row.questions) }));
+    },
+
+    getPassthroughChannel(channelId) {
+      if (!channelId) {
+        return null;
+      }
+      const row = bindAndFetchOne(database, 'SELECT * FROM passthrough_channels WHERE channel_id = $channel_id', {
+        $channel_id: String(channelId),
+      });
+      return row ? { ...row, questions: parsePassthroughQuestions(row.questions) } : null;
+    },
+
+    upsertPassthroughChannel({ channelId, label = '', questions = [], mainChannelId = '', enabled = true }) {
+      const id = String(channelId || '').trim();
+      if (!id) {
+        return false;
+      }
+      bindAndRun(
+        database,
+        `
+        INSERT INTO passthrough_channels (channel_id, label, questions, main_channel_id, enabled)
+        VALUES ($channel_id, $label, $questions, $main_channel_id, $enabled)
+        ON CONFLICT(channel_id) DO UPDATE SET
+          label = excluded.label,
+          questions = excluded.questions,
+          main_channel_id = excluded.main_channel_id,
+          enabled = excluded.enabled,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+        {
+          $channel_id: id,
+          $label: String(label || ''),
+          $questions: JSON.stringify(normalizePassthroughQuestions(questions)),
+          $main_channel_id: String(mainChannelId || ''),
+          $enabled: enabled ? 1 : 0,
+        },
+      );
+      persist();
+      return true;
+    },
+
+    setPassthroughAnchor(channelId, anchorTs) {
+      if (!channelId) {
+        return false;
+      }
+      bindAndRun(
+        database,
+        'UPDATE passthrough_channels SET anchor_ts = $anchor_ts, updated_at = CURRENT_TIMESTAMP WHERE channel_id = $channel_id',
+        { $channel_id: String(channelId), $anchor_ts: String(anchorTs || '') },
+      );
+      persist();
+      return true;
+    },
+
+    removePassthroughChannel(channelId) {
+      if (!channelId) {
+        return false;
+      }
+      bindAndRun(database, 'DELETE FROM passthrough_channels WHERE channel_id = $channel_id', {
+        $channel_id: String(channelId),
+      });
+      persist();
+      return true;
+    },
+
+    createPassthroughRequest({ channelId, userId, answers = [], mainChannelId = '' }) {
+      bindAndRun(
+        database,
+        `
+        INSERT INTO passthrough_requests (channel_id, user_id, answers, main_channel_id)
+        VALUES ($channel_id, $user_id, $answers, $main_channel_id)
+      `,
+        {
+          $channel_id: String(channelId || ''),
+          $user_id: String(userId || ''),
+          $answers: JSON.stringify(Array.isArray(answers) ? answers : []),
+          $main_channel_id: String(mainChannelId || ''),
+        },
+      );
+      persist();
+      const row = bindAndFetchOne(database, 'SELECT * FROM passthrough_requests ORDER BY id DESC LIMIT 1');
+      return row ? { ...row, answers: parsePassthroughAnswers(row.answers) } : null;
+    },
+
+    setPassthroughRequestMessages(id, { messageTs, threadTs, voteTs } = {}) {
+      const sets = [];
+      const params = { $id: Number(id) };
+      if (messageTs !== undefined) {
+        sets.push('message_ts = $message_ts');
+        params.$message_ts = String(messageTs || '');
+      }
+      if (threadTs !== undefined) {
+        sets.push('thread_ts = $thread_ts');
+        params.$thread_ts = String(threadTs || '');
+      }
+      if (voteTs !== undefined) {
+        sets.push('vote_ts = $vote_ts');
+        params.$vote_ts = String(voteTs || '');
+      }
+      if (sets.length === 0) {
+        return false;
+      }
+      bindAndRun(database, `UPDATE passthrough_requests SET ${sets.join(', ')} WHERE id = $id`, params);
+      persist();
+      return true;
+    },
+
+    getPassthroughRequest(id) {
+      const row = bindAndFetchOne(database, 'SELECT * FROM passthrough_requests WHERE id = $id', { $id: Number(id) });
+      return row ? { ...row, answers: parsePassthroughAnswers(row.answers) } : null;
+    },
+
+    /**
+     * The request a vote message belongs to. Reactions only carry the message
+     * they were added to, so this is what turns a reaction into a request.
+     */
+    getPassthroughRequestByVoteTs(voteTs) {
+      if (!voteTs) {
+        return null;
+      }
+      const row = bindAndFetchOne(database, 'SELECT * FROM passthrough_requests WHERE vote_ts = $vote_ts LIMIT 1', {
+        $vote_ts: String(voteTs),
+      });
+      return row ? { ...row, answers: parsePassthroughAnswers(row.answers) } : null;
+    },
+
+    listPassthroughRequests({ limit = 25, status = '' } = {}) {
+      const capped = Math.max(1, Number(limit) || 25);
+      const rows = status
+        ? bindAndFetchAll(
+            database,
+            'SELECT * FROM passthrough_requests WHERE status = $status ORDER BY id DESC LIMIT $limit',
+            { $status: String(status), $limit: capped },
+          )
+        : bindAndFetchAll(database, 'SELECT * FROM passthrough_requests ORDER BY id DESC LIMIT $limit', {
+            $limit: capped,
+          });
+      return rows.map((row) => ({ ...row, answers: parsePassthroughAnswers(row.answers) }));
+    },
+
+    setPassthroughRequestStatus(id, status) {
+      bindAndRun(database, 'UPDATE passthrough_requests SET status = $status WHERE id = $id', {
+        $id: Number(id),
+        $status: String(status || 'open'),
+      });
+      persist();
+      return true;
+    },
+
+    /**
+     * One vote per person per request. Voting the other way replaces the vote
+     * rather than adding a second one, and an empty vote withdraws it.
+     */
+    recordPassthroughVote(requestId, userId, vote) {
+      const id = Number(requestId);
+      const voter = String(userId || '');
+      if (!id || !voter) {
+        return false;
+      }
+      if (!vote) {
+        bindAndRun(database, 'DELETE FROM passthrough_votes WHERE request_id = $id AND user_id = $user_id', {
+          $id: id,
+          $user_id: voter,
+        });
+        persist();
+        return true;
+      }
+      bindAndRun(
+        database,
+        `
+        INSERT INTO passthrough_votes (request_id, user_id, vote) VALUES ($id, $user_id, $vote)
+        ON CONFLICT(request_id, user_id) DO UPDATE SET vote = excluded.vote, created_at = CURRENT_TIMESTAMP
+      `,
+        { $id: id, $user_id: voter, $vote: String(vote) },
+      );
+      persist();
+      return true;
+    },
+
+    countPassthroughVotes(requestId) {
+      const counts = { yes: 0, no: 0 };
+      for (const row of bindAndFetchAll(
+        database,
+        'SELECT vote, COUNT(1) AS n FROM passthrough_votes WHERE request_id = $id GROUP BY vote',
+        { $id: Number(requestId) },
+      )) {
+        if (row.vote === 'yes' || row.vote === 'no') {
+          counts[row.vote] = Number(row.n) || 0;
+        }
+      }
+      return counts;
+    },
+
+    /** Who voted, for the owner's own audit. Never rendered in a channel. */
+    listPassthroughVotes(requestId) {
+      return bindAndFetchAll(
+        database,
+        'SELECT user_id, vote, created_at FROM passthrough_votes WHERE request_id = $id ORDER BY created_at ASC',
+        { $id: Number(requestId) },
+      );
     },
 
     /**

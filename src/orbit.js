@@ -9,6 +9,7 @@ import { createStore } from './database/store.js';
 import { registerDmDashboardLink } from './dm/dashboard-link.js';
 import { registerDmDeleteByLink } from './dm/delete-by-link.js';
 import { createHuddleTracker } from './huddles/tracker.js';
+import { registerPassthrough } from './passthrough/requests.js';
 import { createScheduler } from './scheduler.js';
 import { createHackClubAiService } from './services/ai.js';
 import { createBotChannelDirectory } from './services/bot-channels.js';
@@ -114,6 +115,18 @@ export async function createOrbitRuntime() {
     client: app.client,
     logger,
     permissions,
+  });
+
+  // Pass-through channels: the entry form button, the vote, and the
+  // approve/deny buttons all live outside App Home, so they are registered
+  // separately from the home handlers.
+  registerPassthrough({
+    app,
+    store,
+    client: app.client,
+    logger,
+    ownerId: store.getSettings().personal_channel_owner_id || environment.personalChannelOwnerId,
+    environment,
   });
 
   const huddleTracker = createHuddleTracker({

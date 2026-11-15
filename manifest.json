@@ -34,6 +34,8 @@
         "lists:read",
         "lists:write",
         "mpim:history",
+        "reactions:read",
+        "reactions:write",
         "usergroups:read",
         "usergroups:write",
         "users.profile:read",
@@ -57,7 +59,9 @@
         "message.channels",
         "message.groups",
         "message.im",
-        "message.mpim"
+        "message.mpim",
+        "reaction_added",
+        "reaction_removed"
       ]
     },
     "interactivity": {
