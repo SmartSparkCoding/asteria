@@ -14,8 +14,12 @@ export const VOTE_YES = 'yesyes';
 export const VOTE_NO = 'no-no';
 
 export const OPEN_REQUEST_ACTION = 'passthrough_request_open';
-export const VOTE_ACTION = 'passthrough_vote';
-export const DECIDE_REQUEST_ACTION = 'passthrough_decide';
+// Slack refuses a whole message as `invalid_blocks` when two elements in one
+// actions block share an action_id, so every button gets its own.
+export const VOTE_YES_ACTION = 'passthrough_vote_yes';
+export const VOTE_NO_ACTION = 'passthrough_vote_no';
+export const DECIDE_APPROVE_ACTION = 'passthrough_decide_approve';
+export const DECIDE_DENY_ACTION = 'passthrough_decide_deny';
 
 const MAX_QUESTIONS = 10;
 const MAX_ANSWER_LENGTH = 500;
@@ -217,14 +221,14 @@ export function buildDecisionMessage({ request, ownerId = '' }) {
         elements: [
           {
             type: 'button',
-            action_id: DECIDE_REQUEST_ACTION,
+            action_id: DECIDE_APPROVE_ACTION,
             text: { type: 'plain_text', text: 'Approve and invite' },
             value: `${request.id}:approve`,
             style: 'primary',
           },
           {
             type: 'button',
-            action_id: DECIDE_REQUEST_ACTION,
+            action_id: DECIDE_DENY_ACTION,
             text: { type: 'plain_text', text: 'Deny' },
             value: `${request.id}:deny`,
             style: 'danger',
@@ -337,14 +341,14 @@ export function buildVoteMessage({ request, counts }) {
         elements: [
           {
             type: 'button',
-            action_id: VOTE_ACTION,
+            action_id: VOTE_YES_ACTION,
             text: { type: 'plain_text', text: 'Yes' },
             value: `${request.id}:yes`,
             style: 'primary',
           },
           {
             type: 'button',
-            action_id: VOTE_ACTION,
+            action_id: VOTE_NO_ACTION,
             text: { type: 'plain_text', text: 'No' },
             value: `${request.id}:no`,
             style: 'danger',
@@ -392,7 +396,9 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
       if (error?.data?.error !== 'invalid_blocks') {
         throw error;
       }
-      logger.error(`invalid_blocks in ${channel}: ${JSON.stringify(blocks).slice(0, 1200)}`);
+      // Slack names the offending field in response_metadata.messages.
+      const why = (error?.data?.response_metadata?.messages || []).join('; ');
+      logger.error(`invalid_blocks in ${channel}${why ? ` (${why})` : ''}: ${JSON.stringify(blocks).slice(0, 1200)}`);
       return await slack.chat.postMessage({
         channel,
         thread_ts,
@@ -650,38 +656,41 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
    * The anonymous vote. Buttons rather than reactions, because a reaction shows
    * everyone who pressed it. Only the tally is ever rendered.
    */
-  app.action({ action_id: VOTE_ACTION, type: 'block_actions' }, async ({ ack, body, action, client: actionClient }) => {
-    await ack();
-    const [rawId, rawVote] = String(action?.value || '').split(':');
-    const vote = rawVote === 'yes' ? 'yes' : 'no';
-    const request = store.getPassthroughRequest(Number(rawId));
-    if (!request || request.status !== 'open') {
-      await actionClient.chat.postEphemeral({
-        channel: request?.main_channel_id || body.channel?.id,
-        user: body.user.id,
-        text: 'That request is already settled, so the vote is closed.',
-      });
-      return;
-    }
-    if (body.user.id === request.user_id) {
+  app.action(
+    { action_id: /^passthrough_vote_(yes|no)$/, type: 'block_actions' },
+    async ({ ack, body, action, client: actionClient }) => {
+      await ack();
+      const [rawId, rawVote] = String(action?.value || '').split(':');
+      const vote = rawVote === 'yes' ? 'yes' : 'no';
+      const request = store.getPassthroughRequest(Number(rawId));
+      if (!request || request.status !== 'open') {
+        await actionClient.chat.postEphemeral({
+          channel: request?.main_channel_id || body.channel?.id,
+          user: body.user.id,
+          text: 'That request is already settled, so the vote is closed.',
+        });
+        return;
+      }
+      if (body.user.id === request.user_id) {
+        await actionClient.chat.postEphemeral({
+          channel: request.main_channel_id,
+          user: body.user.id,
+          text: 'You cannot vote on your own request.',
+        });
+        return;
+      }
+      store.recordPassthroughVote(request.id, body.user.id, vote);
+      await refreshVoteMessage(request.id);
       await actionClient.chat.postEphemeral({
         channel: request.main_channel_id,
         user: body.user.id,
-        text: 'You cannot vote on your own request.',
+        text: `Vote counted: ${vote}. Press the other button to change it. Nobody can see how you voted.`,
       });
-      return;
-    }
-    store.recordPassthroughVote(request.id, body.user.id, vote);
-    await refreshVoteMessage(request.id);
-    await actionClient.chat.postEphemeral({
-      channel: request.main_channel_id,
-      user: body.user.id,
-      text: `Vote counted: ${vote}. Press the other button to change it. Nobody can see how you voted.`,
-    });
-  });
+    },
+  );
 
   app.action(
-    { action_id: DECIDE_REQUEST_ACTION, type: 'block_actions' },
+    { action_id: /^passthrough_decide_(approve|deny)$/, type: 'block_actions' },
     async ({ ack, body, action, client: actionClient }) => {
       await ack();
       const [rawId, decision] = String(action?.value || '').split(':');
