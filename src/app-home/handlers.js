@@ -1,4 +1,5 @@
 import { describeHuddleChannels } from '../huddles/channels.js';
+import { buildAnchorMessage, parseQuestionLines } from '../passthrough/requests.js';
 import { createHomeAssistantService } from '../services/home-assistant.js';
 import {
   addUserToUserGroup,
@@ -14,6 +15,7 @@ import { getLocalDateKey, isValidTimeZone, normalizeTimeValue } from '../utils/t
 import {
   buildDailyUpdateModal,
   buildHuddleChannelModal,
+  buildPassthroughChannelModal,
   buildPersonalChannelModal,
   buildPingGroupModal,
   buildQuestionPreviewModal,
@@ -165,6 +167,8 @@ export function createHomeHandlers({
         : notice;
     const { channels: huddleChannels, available: availableChannels } =
       isOwnerUser || isChannelOwnerUser ? await visibleHuddleChannels(userId) : { channels: [], available: [] };
+    const passthroughChannels = isOwnerUser ? store.listPassthroughChannels() : [];
+    const passthroughRequests = isOwnerUser ? store.listPassthroughRequests({ limit: 25, status: 'open' }) : [];
 
     await publishHome(
       client,
@@ -181,6 +185,8 @@ export function createHomeHandlers({
         huddles,
         huddleChannels,
         availableChannels,
+        passthroughChannels,
+        passthroughRequests,
         leaderboard,
         logs,
         isOwner: isOwnerUser,
@@ -1199,6 +1205,136 @@ export function createHomeHandlers({
     }
   }
 
+  // ---- Pass-through channels -------------------------------------------------
+  //
+  // The owner configures these from App Home: pick a channel, write the form,
+  // post the button. Everything after that happens in Slack itself.
+
+  async function postPassthroughAnchor(client, channelId) {
+    const channel = store.getPassthroughChannel(channelId);
+    if (!channel) {
+      return false;
+    }
+    const message = buildAnchorMessage({
+      channelId: channel.channel_id,
+      label: channel.label,
+      questionCount: (channel.questions || []).length,
+    });
+    try {
+      if (channel.anchor_ts) {
+        await client.chat.update({ channel: channel.channel_id, ts: channel.anchor_ts, ...message });
+        return true;
+      }
+      const posted = await client.chat.postMessage({ channel: channel.channel_id, ...message });
+      store.setPassthroughAnchor(channel.channel_id, posted.ts);
+      return true;
+    } catch (error) {
+      logger.error(`Could not post the pass-through button in ${channelId}: ${error?.message || error}`);
+      return false;
+    }
+  }
+
+  async function handlePassthroughAdd({ ack, body, client }) {
+    await ack();
+    if (!isOwner(body.user.id)) {
+      return;
+    }
+    const settings = store.getSettings();
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: buildPassthroughChannelModal({ mainChannelId: settings.personal_channel_id || '' }),
+    });
+  }
+
+  async function handlePassthroughEdit({ ack, body, client }) {
+    await ack();
+    if (!isOwner(body.user.id)) {
+      return;
+    }
+    const channelId = body?.actions?.[0]?.value || '';
+    const channel = store.getPassthroughChannel(channelId);
+    if (!channel) {
+      return;
+    }
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: buildPassthroughChannelModal({ channel }),
+    });
+  }
+
+  async function handlePassthroughPost({ ack, body, client }) {
+    await ack();
+    if (!isOwner(body.user.id)) {
+      return;
+    }
+    const channelId = body?.actions?.[0]?.value || '';
+    const ok = await postPassthroughAnchor(client, channelId);
+    await publishTab(
+      client,
+      body.user.id,
+      'channels',
+      'passthrough',
+      ok ? '' : `I couldn't post in <#${channelId}>. Am I in that channel?`,
+    );
+  }
+
+  async function handlePassthroughRemove({ ack, body, client }) {
+    await ack();
+    if (!isOwner(body.user.id)) {
+      return;
+    }
+    const channelId = body?.actions?.[0]?.value || '';
+    store.removePassthroughChannel(channelId);
+    await publishTab(client, body.user.id, 'channels', 'passthrough', 'Removed that pass-through channel.');
+  }
+
+  async function handlePassthroughChannelSubmit({ ack, body, view, client }) {
+    if (!isOwner(body.user.id)) {
+      await ack();
+      return;
+    }
+    const values = view.state?.values || {};
+    const channelId = values.passthrough_channel_block?.passthrough_channel_value?.selected_conversation || '';
+    const questions = parseQuestionLines(values.passthrough_questions_block?.passthrough_questions_value?.value);
+    if (!channelId) {
+      await ack({
+        response_action: 'errors',
+        errors: { passthrough_channel_block: 'Pick a channel.' },
+      });
+      return;
+    }
+    if (questions.length === 0) {
+      await ack({
+        response_action: 'errors',
+        errors: { passthrough_questions_block: 'Write at least one question.' },
+      });
+      return;
+    }
+    await ack();
+
+    const previousId = view.private_metadata || '';
+    if (previousId && previousId !== channelId) {
+      // The channel is the key, so changing it is a move rather than an edit.
+      store.removePassthroughChannel(previousId);
+    }
+    store.upsertPassthroughChannel({
+      channelId,
+      label: values.passthrough_label_block?.passthrough_label_value?.value || '',
+      questions,
+      mainChannelId: values.passthrough_main_block?.passthrough_main_value?.selected_conversation || '',
+    });
+    const posted = await postPassthroughAnchor(client, channelId);
+    await publishTab(
+      client,
+      body.user.id,
+      'channels',
+      'passthrough',
+      posted
+        ? `Saved. The entry form button is in <#${channelId}>.`
+        : `Saved, but I couldn't post in <#${channelId}>. Invite me there and press "Post button".`,
+    );
+  }
+
   app.action('navigate_category_channels', (payload) => handleNavigation('channels', 'daily-update', payload));
   app.action('navigate_category_huddles', (payload) => handleNavigation('huddles', 'huddle-channels', payload));
   for (const sub of [
@@ -1207,6 +1343,7 @@ export function createHomeHandlers({
     'welcomer',
     'home-assistant',
     'sync',
+    'passthrough',
     'settings',
     'delete',
     'huddle_channels',
@@ -1242,6 +1379,11 @@ export function createHomeHandlers({
   app.action('save_home_assistant_settings', handleSaveHomeAssistantSettings);
   app.action('test_home_assistant_steps', handleTestHomeAssistantSteps);
   app.action('opt_out_of_dag', handleOptOutOfDag);
+  app.action('passthrough_add', handlePassthroughAdd);
+  app.action(/^passthrough_edit_/, handlePassthroughEdit);
+  app.action(/^passthrough_post_/, handlePassthroughPost);
+  app.action(/^passthrough_remove_/, handlePassthroughRemove);
+  app.view('passthrough_channel_submit', handlePassthroughChannelSubmit);
   app.view('compose_daily_update_submit', handleComposeDailyUpdateSubmit);
   app.view('edit_thread_message_submit', handleEditThreadMessageSubmit);
   app.view('edit_welcome_message_submit', handleEditWelcomeMessageSubmit);

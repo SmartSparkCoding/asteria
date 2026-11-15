@@ -397,3 +397,142 @@ export function buildQuestionTestErrorModal({ text }) {
     blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }],
   };
 }
+
+/**
+ * The owner's side: pick the pass-through channel and write its form.
+ *
+ * `questions` is one question per line; a line ending in `| required` has to be
+ * answered before the form submits.
+ */
+export function buildPassthroughChannelModal({ channel = null, mainChannelId = '' } = {}) {
+  const editing = Boolean(channel?.channel_id);
+  const questionLines =
+    (channel?.questions || []).length > 0
+      ? channel.questions
+          .map((question) => (question.required ? `${question.label} | required` : question.label))
+          .join('\n')
+      : '';
+  const blocks = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: editing
+          ? `Editing the entry form for <#${channel.channel_id}>. Requests are announced in the main channel and voted on in the thread.`
+          : 'Pick the channel people should be able to request access to. Requests are announced in the main channel and voted on in the thread.',
+      },
+    },
+    {
+      type: 'input',
+      block_id: 'passthrough_channel_block',
+      label: { type: 'plain_text', text: 'Channel' },
+      element: {
+        type: 'conversations_select',
+        action_id: 'passthrough_channel_value',
+        ...(editing ? { initial_conversation: channel.channel_id } : {}),
+        filter: { include: ['public', 'private'], exclude_bot_users: true },
+        placeholder: { type: 'plain_text', text: 'Pick a channel' },
+      },
+    },
+    {
+      type: 'input',
+      block_id: 'passthrough_label_block',
+      optional: true,
+      label: { type: 'plain_text', text: 'Label (optional)' },
+      element: {
+        type: 'plain_text_input',
+        action_id: 'passthrough_label_value',
+        initial_value: channel?.label || '',
+        placeholder: { type: 'plain_text', text: 'What this channel is for' },
+      },
+    },
+    {
+      type: 'input',
+      block_id: 'passthrough_questions_block',
+      label: { type: 'plain_text', text: 'Entry form questions' },
+      element: {
+        type: 'plain_text_input',
+        action_id: 'passthrough_questions_value',
+        multiline: true,
+        initial_value: questionLines,
+        placeholder: {
+          type: 'plain_text',
+          text: 'One question per line.\nWhy do you want in?\nWhat do you build | required',
+        },
+      },
+      hint: {
+        type: 'plain_text',
+        text: 'One question per line. Add "| required" to a line to make it mandatory. Up to 10.',
+      },
+    },
+    {
+      type: 'input',
+      block_id: 'passthrough_main_block',
+      optional: true,
+      label: { type: 'plain_text', text: 'Announce requests in (optional)' },
+      element: {
+        type: 'conversations_select',
+        action_id: 'passthrough_main_value',
+        ...(channel?.main_channel_id || mainChannelId
+          ? { initial_conversation: channel?.main_channel_id || mainChannelId }
+          : {}),
+        filter: { include: ['public', 'private'], exclude_bot_users: true },
+        placeholder: { type: 'plain_text', text: 'The main channel' },
+      },
+      hint: { type: 'plain_text', text: 'Leave empty to use the main channel.' },
+    },
+  ];
+
+  return {
+    type: 'modal',
+    callback_id: 'passthrough_channel_submit',
+    private_metadata: channel?.channel_id || '',
+    title: { type: 'plain_text', text: editing ? 'Edit entry form' : 'Pass-through channel' },
+    submit: { type: 'plain_text', text: 'Save' },
+    close: { type: 'plain_text', text: 'Cancel' },
+    blocks,
+  };
+}
+
+/** The person's side: whatever questions the owner wrote, as real inputs. */
+export function buildPassthroughRequestModal({ channel }) {
+  const questions = channel?.questions || [];
+  const blocks = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `Your answers go to the owner of <#${channel.channel_id}> and anyone they ask to vote. They are not posted in the channel.`,
+      },
+    },
+    ...questions.map((question) => ({
+      type: 'input',
+      block_id: `passthrough_answer_${question.id}`,
+      optional: !question.required,
+      label: { type: 'plain_text', text: question.label.slice(0, 150) },
+      element: {
+        type: 'plain_text_input',
+        action_id: 'passthrough_answer_value',
+        multiline: true,
+        max_length: 500,
+      },
+    })),
+  ];
+
+  if (questions.length === 0) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: '_This channel has no questions yet, so there is nothing to ask._' },
+    });
+  }
+
+  return {
+    type: 'modal',
+    callback_id: 'passthrough_request_submit',
+    private_metadata: channel?.channel_id || '',
+    title: { type: 'plain_text', text: 'Request access' },
+    submit: { type: 'plain_text', text: 'Send request' },
+    close: { type: 'plain_text', text: 'Cancel' },
+    blocks,
+  };
+}
