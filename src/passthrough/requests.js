@@ -14,10 +14,31 @@ export const VOTE_YES = 'yesyes';
 export const VOTE_NO = 'no-no';
 
 export const OPEN_REQUEST_ACTION = 'passthrough_request_open';
+export const VOTE_ACTION = 'passthrough_vote';
 export const DECIDE_REQUEST_ACTION = 'passthrough_decide';
 
 const MAX_QUESTIONS = 10;
 const MAX_ANSWER_LENGTH = 500;
+
+/** How long someone waits after a denial before the form opens for them again. */
+export const REAPPLY_DAYS = 10;
+
+/**
+ * When a denied person may try again, or null if they are free to apply now.
+ * `decided_at` is a SQL timestamp; a request denied before that column existed
+ * falls back to when it was filed.
+ */
+export function reapplyAt({ request, now = DateTime.utc() }) {
+  if (!request || request.status !== 'denied') {
+    return null;
+  }
+  const decided = DateTime.fromSQL(request.decided_at || request.created_at || '', { zone: 'utc' });
+  if (!decided.isValid) {
+    return null;
+  }
+  const until = decided.plus({ days: REAPPLY_DAYS });
+  return until > now ? until : null;
+}
 
 /**
  * One question per line. A line ending in `| required` must be answered before
@@ -156,15 +177,36 @@ export function buildAnchorMessage({ channelId, label = '', questionCount = 0 })
   };
 }
 
-export function buildRequestAnnouncement({ userId, channelId, requestId }) {
+/**
+ * The one-line announcement in the main channel. Deliberately short: the answers
+ * and the vote live in the thread, so the channel itself stays readable.
+ */
+export function buildRequestAnnouncement({ userId, channelId }) {
   return {
-    text: `<@${userId}> wants access to ${channelLabel(channelId)}. The form answers are in this thread.`,
+    text: `<@${userId}> wants to join ${channelLabel(channelId)}! See the thread for details.`,
     blocks: [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `:inbox_tray: *<@${userId}> wants access to ${channelLabel(channelId)}.*\nThe form answers and the vote are in this thread.`,
+          text: `:inbox_tray: *<@${userId}> wants to join ${channelLabel(channelId)}!* See the thread for details.`,
+        },
+      },
+    ],
+  };
+}
+
+/** The owner-only message that ends a request. */
+export function buildDecisionMessage({ request, ownerId = '' }) {
+  const who = ownerId ? `<@${ownerId}>` : 'the channel manager';
+  return {
+    text: `Final say for ${who}: should <@${request.user_id}> join ${channelLabel(request.channel_id)}?`,
+    blocks: [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `:scales: *Final say for ${who}.* Approve or deny <@${request.user_id}> for ${channelLabel(request.channel_id)}.`,
         },
       },
       {
@@ -175,21 +217,39 @@ export function buildRequestAnnouncement({ userId, channelId, requestId }) {
             type: 'button',
             action_id: DECIDE_REQUEST_ACTION,
             text: { type: 'plain_text', text: 'Approve and invite' },
-            value: `${requestId}:approve`,
+            value: `${request.id}:approve`,
             style: 'primary',
           },
           {
             type: 'button',
             action_id: DECIDE_REQUEST_ACTION,
             text: { type: 'plain_text', text: 'Deny' },
-            value: `${requestId}:deny`,
+            value: `${request.id}:deny`,
             style: 'danger',
           },
         ],
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: 'Only the channel owner can approve or deny.' }],
+        elements: [{ type: 'mrkdwn', text: 'Only the channel manager can press these.' }],
+      },
+    ],
+  };
+}
+
+/** What the decision message turns into once it has been pressed. */
+export function buildDecisionResult({ request, decision, byUserId = '' }) {
+  const who = byUserId ? `<@${byUserId}>` : 'The channel manager';
+  const verdict = decision === 'approve' ? 'approved' : 'denied';
+  return {
+    text: `${who} ${verdict} <@${request.user_id}> for ${channelLabel(request.channel_id)}.`,
+    blocks: [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `${decision === 'approve' ? ':white_check_mark:' : ':no_entry:'} ${who} ${verdict} <@${request.user_id}> for ${channelLabel(request.channel_id)}.`,
+        },
       },
     ],
   };
@@ -222,19 +282,36 @@ export function tallyText(counts) {
 
 export function buildVoteMessage({ request, counts }) {
   return {
-    text: `Vote: should <@${request.user_id}> get access to ${channelLabel(request.channel_id)}? React :${VOTE_YES}: for yes or :${VOTE_NO}: for no.`,
+    text: `Vote: should <@${request.user_id}> join ${channelLabel(request.channel_id)}? ${tallyText(counts)}`,
     blocks: [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `:ballot_box: *Vote:* should <@${request.user_id}> get access to ${channelLabel(request.channel_id)}?\nReact :${VOTE_YES}: for yes or :${VOTE_NO}: for no. Change your mind by reacting the other way. Only the tally is shown, never who voted.`,
+          text: `:ballot_box: *Should <@${request.user_id}> join ${channelLabel(request.channel_id)}?*\nPress a button. The tally updates here, and nobody can see how you voted.`,
         },
       },
       {
-        type: 'context',
-        elements: [{ type: 'mrkdwn', text: tallyText(counts) }],
+        type: 'actions',
+        block_id: 'passthrough_vote_actions',
+        elements: [
+          {
+            type: 'button',
+            action_id: VOTE_ACTION,
+            text: { type: 'plain_text', text: 'Yes' },
+            value: `${request.id}:yes`,
+            style: 'primary',
+          },
+          {
+            type: 'button',
+            action_id: VOTE_ACTION,
+            text: { type: 'plain_text', text: 'No' },
+            value: `${request.id}:no`,
+            style: 'danger',
+          },
+        ],
       },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: tallyText(counts) }] },
     ],
   };
 }
@@ -379,13 +456,14 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
       return;
     }
 
-    const alreadyOpen = store
-      .listPassthroughRequests({ limit: 200, status: 'open' })
-      .find((request) => request.channel_id === channelId && request.user_id === userId);
-    if (alreadyOpen) {
+    // A denial starts a wait. Anyone else, including someone with a request
+    // already open, can fill the form in as many times as they like.
+    const lastDenied = store.getLatestPassthroughRequest({ channelId, userId, status: 'denied' });
+    const waitUntil = reapplyAt({ request: lastDenied });
+    if (waitUntil) {
       await viewClient.chat.postMessage({
         channel: userId,
-        text: `You already have an open request for <#${channelId}>. Give the owner a moment to look at it.`,
+        text: `Your last request for <#${channelId}> was denied, so the form opens again on ${waitUntil.toFormat('d LLL yyyy')}. Nothing was sent.`,
       });
       return;
     }
@@ -417,7 +495,7 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
     try {
       const announcement = await slack.chat.postMessage({
         channel: mainChannelId,
-        ...buildRequestAnnouncement({ userId, channelId, requestId: request.id }),
+        ...buildRequestAnnouncement({ userId, channelId }),
       });
       step = 'record';
       store.setPassthroughRequestMessages(request.id, {
@@ -438,15 +516,14 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
         ...buildVoteMessage({ request, counts: { yes: 0, no: 0 } }),
       });
       store.setPassthroughRequestMessages(request.id, { voteTs: vote.ts });
-      // Seed both reactions so the vote is one tap for everyone else, including
-      // on mobile where a half-typed emoji name is a wall.
-      for (const name of [VOTE_YES, VOTE_NO]) {
-        try {
-          await slack.reactions.add({ channel: mainChannelId, timestamp: vote.ts, name });
-        } catch (error) {
-          logger.warn(`Could not add :${name}: to the passthrough vote: ${error?.message || error}`);
-        }
-      }
+      step = 'decide';
+      const manager = ownerId || settings.personal_channel_owner_id;
+      const decision = await slack.chat.postMessage({
+        channel: mainChannelId,
+        thread_ts: announcement.ts,
+        ...buildDecisionMessage({ request, ownerId: manager }),
+      });
+      store.setPassthroughRequestMessages(request.id, { decisionTs: decision.ts });
       store.recordTriggerLog({
         userId,
         action: 'passthrough_request',
@@ -485,6 +562,40 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
     }
   });
 
+  /**
+   * The anonymous vote. Buttons rather than reactions, because a reaction shows
+   * everyone who pressed it. Only the tally is ever rendered.
+   */
+  app.action({ action_id: VOTE_ACTION, type: 'block_actions' }, async ({ ack, body, action, client: actionClient }) => {
+    await ack();
+    const [rawId, rawVote] = String(action?.value || '').split(':');
+    const vote = rawVote === 'yes' ? 'yes' : 'no';
+    const request = store.getPassthroughRequest(Number(rawId));
+    if (!request || request.status !== 'open') {
+      await actionClient.chat.postEphemeral({
+        channel: request?.main_channel_id || body.channel?.id,
+        user: body.user.id,
+        text: 'That request is already settled, so the vote is closed.',
+      });
+      return;
+    }
+    if (body.user.id === request.user_id) {
+      await actionClient.chat.postEphemeral({
+        channel: request.main_channel_id,
+        user: body.user.id,
+        text: 'You cannot vote on your own request.',
+      });
+      return;
+    }
+    store.recordPassthroughVote(request.id, body.user.id, vote);
+    await refreshVoteMessage(request.id);
+    await actionClient.chat.postEphemeral({
+      channel: request.main_channel_id,
+      user: body.user.id,
+      text: `Vote counted: ${vote}. Press the other button to change it. Nobody can see how you voted.`,
+    });
+  });
+
   app.action(
     { action_id: DECIDE_REQUEST_ACTION, type: 'block_actions' },
     async ({ ack, body, action, client: actionClient }) => {
@@ -495,22 +606,40 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
         return;
       }
       const settings = store.getSettings();
-      const isOwner = body.user.id === (ownerId || settings.personal_channel_owner_id);
-      if (!isOwner) {
+      const manager = ownerId || settings.personal_channel_owner_id;
+      if (body.user.id !== manager) {
         await actionClient.chat.postEphemeral({
           channel: request.main_channel_id,
           user: body.user.id,
-          text: 'Only the channel owner can approve or deny a request.',
+          text: 'Only the channel manager can approve or deny a request.',
         });
         return;
       }
 
+      // The message sits in the main channel where everyone can see it, but the
+      // check above is the gate: only the manager's press does anything.
+      const stampDecision = async (applied) => {
+        if (!request.decision_ts) {
+          return;
+        }
+        try {
+          await slack.chat.update({
+            channel: request.main_channel_id,
+            ts: request.decision_ts,
+            ...buildDecisionResult({ request, decision: applied, byUserId: body.user.id }),
+          });
+        } catch (error) {
+          logger.error(`Could not update the passthrough decision message: ${error?.message || error}`);
+        }
+      };
+
       if (decision === 'deny') {
         store.setPassthroughRequestStatus(request.id, 'denied');
+        await stampDecision('deny');
         await slack.chat.postMessage({
           channel: request.main_channel_id,
           thread_ts: request.thread_ts || request.message_ts,
-          text: `<@${request.user_id}>'s request for <#${request.channel_id}> was denied.`,
+          text: `<@${request.user_id}>'s request for <#${request.channel_id}> was denied. They can fill the form in again in ${REAPPLY_DAYS} days.`,
         });
         return;
       }
@@ -518,6 +647,7 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
       try {
         await slack.conversations.invite({ channel: request.channel_id, users: request.user_id });
         store.setPassthroughRequestStatus(request.id, 'approved');
+        await stampDecision('approve');
         await slack.chat.postMessage({
           channel: request.main_channel_id,
           thread_ts: request.thread_ts || request.message_ts,
@@ -565,16 +695,12 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
     if (userId === (await botId())) {
       return;
     }
-    // Already asked, or already let in: don't nag them every time they rejoin.
-    const settled = store
-      .listPassthroughRequests({ limit: 200 })
-      .some(
-        (request) =>
-          request.channel_id === channelId &&
-          request.user_id === userId &&
-          (request.status === 'open' || request.status === 'approved'),
-      );
-    if (settled) {
+    // Already let in: no form needed. Everything else gets one, even if they
+    // have asked before. Filling it in again is fine.
+    const approved = store
+      .listPassthroughRequests({ limit: 200, status: 'approved' })
+      .some((request) => request.channel_id === channelId && request.user_id === userId);
+    if (approved) {
       return;
     }
     try {

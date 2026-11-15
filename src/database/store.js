@@ -590,9 +590,15 @@ export async function createStore(databasePath, options = {}) {
       -- The announcement in the main channel, and the thread under it.
       message_ts TEXT NOT NULL DEFAULT '',
       thread_ts TEXT NOT NULL DEFAULT '',
-      -- The message carrying the two vote reactions.
+      -- The message carrying the two vote buttons.
       vote_ts TEXT NOT NULL DEFAULT '',
+      -- The message carrying the owner-only approve/deny buttons, so a decision
+      -- can be stamped onto it afterwards.
+      decision_ts TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'open',
+      -- When the owner said yes or no. A denial starts the waiting period, so
+      -- this has to be a real timestamp rather than only a status.
+      decided_at TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -646,6 +652,18 @@ export async function createStore(databasePath, options = {}) {
   const triggerLogColumns = bindAndFetchAll(database, 'PRAGMA table_info(trigger_log)').map((column) => column.name);
   if (!triggerLogColumns.includes('channel_id')) {
     bindAndRun(database, "ALTER TABLE trigger_log ADD COLUMN channel_id TEXT NOT NULL DEFAULT ''");
+  }
+
+  // The decision message and the waiting period after a denial landed after the
+  // pass-through tables were first created, so live databases need them added.
+  const requestColumns = bindAndFetchAll(database, 'PRAGMA table_info(passthrough_requests)').map(
+    (column) => column.name,
+  );
+  if (!requestColumns.includes('decision_ts')) {
+    bindAndRun(database, "ALTER TABLE passthrough_requests ADD COLUMN decision_ts TEXT NOT NULL DEFAULT ''");
+  }
+  if (!requestColumns.includes('decided_at')) {
+    bindAndRun(database, "ALTER TABLE passthrough_requests ADD COLUMN decided_at TEXT NOT NULL DEFAULT ''");
   }
 
   // Added after the first release, so existing databases need them backfilled.
@@ -2240,7 +2258,7 @@ export async function createStore(databasePath, options = {}) {
       return row ? { ...row, answers: parsePassthroughAnswers(row.answers) } : null;
     },
 
-    setPassthroughRequestMessages(id, { messageTs, threadTs, voteTs } = {}) {
+    setPassthroughRequestMessages(id, { messageTs, threadTs, voteTs, decisionTs } = {}) {
       const sets = [];
       const params = { $id: Number(id) };
       if (messageTs !== undefined) {
@@ -2254,6 +2272,10 @@ export async function createStore(databasePath, options = {}) {
       if (voteTs !== undefined) {
         sets.push('vote_ts = $vote_ts');
         params.$vote_ts = String(voteTs || '');
+      }
+      if (decisionTs !== undefined) {
+        sets.push('decision_ts = $decision_ts');
+        params.$decision_ts = String(decisionTs || '');
       }
       if (sets.length === 0) {
         return false;
@@ -2297,12 +2319,34 @@ export async function createStore(databasePath, options = {}) {
     },
 
     setPassthroughRequestStatus(id, status) {
-      bindAndRun(database, 'UPDATE passthrough_requests SET status = $status WHERE id = $id', {
-        $id: Number(id),
-        $status: String(status || 'open'),
-      });
+      const next = String(status || 'open');
+      // A decision is stamped with its time, because a denial starts a wait.
+      const decidedAt = next === 'open' ? "''" : 'CURRENT_TIMESTAMP';
+      bindAndRun(
+        database,
+        `UPDATE passthrough_requests SET status = $status, decided_at = ${decidedAt} WHERE id = $id`,
+        { $id: Number(id), $status: next },
+      );
       persist();
       return true;
+    },
+
+    /**
+     * The newest request one person made for one channel, optionally filtered by
+     * status. Used to enforce the waiting period after a denial.
+     */
+    getLatestPassthroughRequest({ channelId = '', userId = '', status = '' } = {}) {
+      const params = { $channel_id: String(channelId || ''), $user_id: String(userId || '') };
+      const statusClause = status ? 'AND status = $status' : '';
+      if (status) {
+        params.$status = String(status);
+      }
+      const row = bindAndFetchOne(
+        database,
+        `SELECT * FROM passthrough_requests WHERE channel_id = $channel_id AND user_id = $user_id ${statusClause} ORDER BY id DESC LIMIT 1`,
+        params,
+      );
+      return row ? { ...row, answers: parsePassthroughAnswers(row.answers) } : null;
     },
 
     /**
