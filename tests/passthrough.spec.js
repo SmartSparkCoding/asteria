@@ -99,7 +99,10 @@ describe('passthrough messages', () => {
       actions.elements.map((element) => element.value),
       ['7:yes', '7:no'],
     );
-    assert.equal(actions.elements[0].action_id, 'passthrough_vote');
+    assert.deepEqual(
+      actions.elements.map((element) => element.action_id),
+      ['passthrough_vote_yes', 'passthrough_vote_no'],
+    );
     assert.doesNotMatch(JSON.stringify(message), /U2|U3|U4/);
   });
 
@@ -110,7 +113,29 @@ describe('passthrough messages', () => {
       actions.elements.map((element) => element.value),
       ['7:approve', '7:deny'],
     );
+    assert.deepEqual(
+      actions.elements.map((element) => element.action_id),
+      ['passthrough_decide_approve', 'passthrough_decide_deny'],
+    );
     assert.match(message.blocks[0].text.text, /<@U9>/);
+  });
+
+  it('never repeats an action_id inside one actions block', () => {
+    // Slack rejects the whole message with invalid_blocks for that, which is
+    // what silently stripped the buttons off the vote and decision messages.
+    const messages = [
+      buildVoteMessage({ request: { id: 7, user_id: 'U1', channel_id: 'C123' }, counts: { yes: 0, no: 0 } }),
+      buildDecisionMessage({ request: { id: 7, user_id: 'U1', channel_id: 'C123' }, ownerId: 'U9' }),
+      buildAnchorMessage({ channelId: 'C123', label: 'Ideas', questionCount: 2 }),
+      buildJoinMessage({ channelId: 'C123', userId: 'U1', label: 'Ideas', questionCount: 2 }),
+    ];
+    for (const message of messages) {
+      for (const block of message.blocks) {
+        if (block.type !== 'actions') continue;
+        const ids = block.elements.map((element) => element.action_id);
+        assert.equal(new Set(ids).size, ids.length, `duplicate action_id in ${block.block_id}`);
+      }
+    }
   });
 
   it('says who decided once the request is settled', () => {
