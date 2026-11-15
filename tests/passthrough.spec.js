@@ -3,12 +3,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
+import { DateTime } from 'luxon';
 import { buildPassthroughChannelModal, buildPassthroughRequestModal } from '../src/app-home/modals.js';
 import { buildPassthroughView } from '../src/app-home/views.js';
 import { createStore } from '../src/database/store.js';
 import {
   buildAnchorMessage,
   buildAnswersBlocks,
+  buildDecisionMessage,
+  buildDecisionResult,
   buildJoinMessage,
   buildRequestAnnouncement,
   buildVoteMessage,
@@ -18,6 +21,7 @@ import {
   parseOpenValue,
   parseQuestionLines,
   parseRequestMeta,
+  reapplyAt,
   resolveMainChannel,
   tallyText,
 } from '../src/passthrough/requests.js';
@@ -71,26 +75,62 @@ describe('passthrough messages', () => {
     assert.match(message.blocks[0].text.text, /2 questions/);
   });
 
-  it('announces the request with approve and deny buttons', () => {
-    const message = buildRequestAnnouncement({ userId: 'U1', channelId: 'C123', requestId: 7 });
-    const actions = message.blocks.find((block) => block.type === 'actions');
-    assert.deepEqual(
-      actions.elements.map((element) => element.value),
-      ['7:approve', '7:deny'],
+  it('announces the request in the main channel and leaves the voting to the thread', () => {
+    const message = buildRequestAnnouncement({ userId: 'U1', channelId: 'C123' });
+    assert.equal(
+      message.blocks.some((block) => block.type === 'actions'),
+      false,
     );
-    assert.match(message.text, /<@U1> wants access to <#C123>/);
+    assert.match(message.text, /<@U1> wants to join <#C123>/);
+    assert.match(message.text, /thread/);
   });
 
   it('shows the tally without naming a voter', () => {
     const text = tallyText({ yes: 3, no: 1 });
     assert.equal(text, 'Yes *3* · No *1* · 4 votes so far');
     const message = buildVoteMessage({
-      request: { user_id: 'U1', channel_id: 'C123' },
+      request: { id: 7, user_id: 'U1', channel_id: 'C123' },
       counts: { yes: 3, no: 1 },
     });
-    assert.match(message.blocks[0].text.text, /:yesyes:/);
-    assert.match(message.blocks[0].text.text, /:no-no:/);
+    const actions = message.blocks.find((block) => block.type === 'actions');
+    assert.deepEqual(
+      actions.elements.map((element) => element.value),
+      ['7:yes', '7:no'],
+    );
+    assert.equal(actions.elements[0].action_id, 'passthrough_vote');
     assert.doesNotMatch(JSON.stringify(message), /U2|U3|U4/);
+  });
+
+  it('keeps approve and deny on the manager-only decision message', () => {
+    const message = buildDecisionMessage({ request: { id: 7, user_id: 'U1', channel_id: 'C123' }, ownerId: 'U9' });
+    const actions = message.blocks.find((block) => block.type === 'actions');
+    assert.deepEqual(
+      actions.elements.map((element) => element.value),
+      ['7:approve', '7:deny'],
+    );
+    assert.match(message.blocks[0].text.text, /<@U9>/);
+  });
+
+  it('says who decided once the request is settled', () => {
+    const message = buildDecisionResult({
+      request: { id: 7, user_id: 'U1', channel_id: 'C123' },
+      decision: 'deny',
+      byUserId: 'U9',
+    });
+    assert.match(message.text, /<@U9> denied <@U1>/);
+  });
+
+  it('waits ten days before a denied requester can fill it in again', () => {
+    const decidedAt = '2026-11-15 11:00:00';
+    const now = DateTime.fromSQL(decidedAt, { zone: 'utc' }).plus({ days: 3 });
+    const wait = reapplyAt({ request: { status: 'denied', decided_at: decidedAt }, now });
+    assert.equal(wait.toFormat('yyyy-LL-dd'), '2026-11-25');
+    assert.equal(reapplyAt({ request: { status: 'approved', decided_at: decidedAt }, now }), null);
+    assert.equal(reapplyAt({ request: { status: 'open' }, now }), null);
+    assert.equal(
+      reapplyAt({ request: { status: 'denied', decided_at: decidedAt }, now: now.plus({ days: 11 }) }),
+      null,
+    );
   });
 
   it('renders every answer, and says so when one was skipped', () => {
