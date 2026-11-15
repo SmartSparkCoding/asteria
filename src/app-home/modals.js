@@ -495,7 +495,7 @@ export function buildPassthroughChannelModal({ channel = null, mainChannelId = '
 }
 
 /** The person's side: whatever questions the owner wrote, as real inputs. */
-export function buildPassthroughRequestModal({ channel }) {
+export function buildPassthroughRequestModal({ channel, meta = '' }) {
   const questions = channel?.questions || [];
   const blocks = [
     {
@@ -529,10 +529,45 @@ export function buildPassthroughRequestModal({ channel }) {
   return {
     type: 'modal',
     callback_id: 'passthrough_request_submit',
-    private_metadata: channel?.channel_id || '',
+    private_metadata: meta || channel?.channel_id || '',
     title: { type: 'plain_text', text: 'Request access' },
     submit: { type: 'plain_text', text: 'Send request' },
     close: { type: 'plain_text', text: 'Cancel' },
     blocks,
+  };
+}
+
+/**
+ * The owner's test run: one field, who to send it to. Everything else about the
+ * form is already decided by the channel's settings.
+ */
+export function buildPassthroughTestModal({ channel, defaultUserId = '' } = {}) {
+  return {
+    type: 'modal',
+    callback_id: 'passthrough_test_submit',
+    private_metadata: channel?.channel_id || '',
+    title: { type: 'plain_text', text: 'Send a test form' },
+    submit: { type: 'plain_text', text: 'Send test' },
+    close: { type: 'plain_text', text: 'Cancel' },
+    blocks: [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `Orbit will DM that person a real copy of the entry form for <#${channel?.channel_id}>. Filling it in shows you what a submission looks like, and files nothing.`,
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'passthrough_test_user_block',
+        label: { type: 'plain_text', text: 'Send the test to' },
+        element: {
+          type: 'users_select',
+          action_id: 'passthrough_test_user',
+          ...(defaultUserId ? { initial_user: defaultUserId } : {}),
+          placeholder: { type: 'plain_text', text: 'Pick a person' },
+        },
+      },
+    ],
   };
 }

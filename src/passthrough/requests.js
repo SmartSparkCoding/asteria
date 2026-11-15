@@ -48,6 +48,83 @@ function channelLabel(channelId) {
   return channelId ? `<#${channelId}>` : 'the channel';
 }
 
+/**
+ * A button carries the channel it belongs to, who the form is for, and whether
+ * it is a test. `channelId|userId|test`.
+ */
+export function encodeOpenValue({ channelId, targetUserId = '', test = false }) {
+  return [channelId, targetUserId, test ? 'test' : ''].join('|');
+}
+
+export function parseOpenValue(value) {
+  const parts = String(value || '').split('|');
+  return {
+    channelId: parts[0] || '',
+    targetUserId: parts[1] || '',
+    test: parts[2] === 'test',
+  };
+}
+
+/**
+ * Modal private_metadata is a string, and a form opened from a join message has
+ * to keep remembering who it belongs to. Older buttons only had the channel id,
+ * so a bare id still parses.
+ */
+export function encodeRequestMeta({ channelId, targetUserId = '', test = false }) {
+  return JSON.stringify({ channelId, targetUserId, test });
+}
+
+export function parseRequestMeta(raw) {
+  const text = String(raw || '').trim();
+  if (!text.startsWith('{')) {
+    return { channelId: text, targetUserId: '', test: false };
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return {
+      channelId: String(parsed?.channelId || ''),
+      targetUserId: String(parsed?.targetUserId || ''),
+      test: Boolean(parsed?.test),
+    };
+  } catch {
+    return { channelId: '', targetUserId: '', test: false };
+  }
+}
+
+/**
+ * The per-person message Orbit posts when someone joins a pass-through channel.
+ * The button value names them, so the form only opens for the person it was
+ * written for.
+ */
+export function buildJoinMessage({ channelId, userId, label = '', questionCount = 0, test = false }) {
+  const target = label ? `*${label}* (<#${channelId}>)` : `<#${channelId}>`;
+  const questions = questionCount === 1 ? '1 question' : `${questionCount} questions`;
+  const body = test
+    ? `:passport_control: *Test entry form for ${target}.*\nThis is a test, <@${userId}>. Fill it in (${questions}) and Orbit will show you exactly what the owner sees. Nothing is announced and nobody votes on it.`
+    : `:passport_control: *Welcome, <@${userId}>.*\nBefore you go any further, fill in the entry form for ${target} (${questions}). It takes a minute, and only the owner sees your answers.`;
+  return {
+    text: test
+      ? `Test entry form for ${channelLabel(channelId)}.`
+      : `Welcome <@${userId}>. Fill in the entry form for ${channelLabel(channelId)} to ask for access.`,
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: body } },
+      {
+        type: 'actions',
+        block_id: 'passthrough_request_actions',
+        elements: [
+          {
+            type: 'button',
+            action_id: OPEN_REQUEST_ACTION,
+            text: { type: 'plain_text', text: test ? 'Try the entry form' : 'Fill in the entry form' },
+            value: encodeOpenValue({ channelId, targetUserId: userId, test }),
+            style: 'primary',
+          },
+        ],
+      },
+    ],
+  };
+}
+
 /** The message pinned in a pass-through channel that opens the form. */
 export function buildAnchorMessage({ channelId, label = '', questionCount = 0 }) {
   const title = label ? `*${label}* (<#${channelId}>)` : `<#${channelId}>`;
@@ -220,20 +297,43 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
 
   app.action({ action_id: OPEN_REQUEST_ACTION, type: 'block_actions' }, async ({ ack, body, client: actionClient }) => {
     await ack();
-    const channelId = body?.actions?.[0]?.value || '';
+    const { channelId, targetUserId, test } = parseOpenValue(body?.actions?.[0]?.value);
     const channel = store.getPassthroughChannel(channelId);
-    if (!channel) {
+    if (!channel || !channel.enabled) {
+      await actionClient.chat
+        .postEphemeral({
+          channel: body.channel?.id || channelId,
+          user: body.user.id,
+          text: 'That entry form is not open right now.',
+        })
+        .catch(() => {});
+      return;
+    }
+    if (targetUserId && body.user.id !== targetUserId) {
+      // The join message names one person. Anyone else pressing it gets told,
+      // rather than filling in a form that was never theirs.
+      await actionClient.chat
+        .postEphemeral({
+          channel: body.channel?.id || channelId,
+          user: body.user.id,
+          text: `That form is <@${targetUserId}>'s. Join <#${channelId}> to get your own, or ask the owner to send you one.`,
+        })
+        .catch(() => {});
       return;
     }
     const { buildPassthroughRequestModal } = await import('../app-home/modals.js');
     await actionClient.views.open({
       trigger_id: body.trigger_id,
-      view: buildPassthroughRequestModal({ channel }),
+      view: buildPassthroughRequestModal({
+        channel,
+        meta: encodeRequestMeta({ channelId, targetUserId, test }),
+      }),
     });
   });
 
   app.view('passthrough_request_submit', async ({ ack, body, view, client: viewClient }) => {
-    const channelId = view.private_metadata || '';
+    const meta = parseRequestMeta(view.private_metadata);
+    const channelId = meta.channelId;
     const channel = store.getPassthroughChannel(channelId);
     const userId = body.user.id;
     if (!channel || !channel.enabled) {
@@ -258,6 +358,26 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
       return;
     }
     await ack();
+
+    if (meta.test) {
+      // A test run: the owner sees exactly what a real submission looks like,
+      // and nothing is filed, announced or voted on.
+      const owner = ownerId || store.getSettings().personal_channel_owner_id;
+      const preview = { user_id: userId, channel_id: channelId, answers, created_at: null };
+      if (owner) {
+        await viewClient.chat
+          .postMessage({
+            channel: owner,
+            text: `Test entry form from <@${userId}> for <#${channelId}>. Nothing was filed.`,
+            blocks: buildAnswersBlocks({ request: preview }),
+          })
+          .catch((error) => logger.warn(`Could not DM the test form: ${error?.message || error}`));
+      }
+      await viewClient.chat
+        .postMessage({ channel: userId, text: 'That was the test. Nothing was announced and no request was filed.' })
+        .catch(() => {});
+      return;
+    }
 
     const alreadyOpen = store
       .listPassthroughRequests({ limit: 200, status: 'open' })
@@ -291,21 +411,27 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
       return;
     }
 
+    // Each step is tracked so a failure can say what actually broke. The old
+    // catch-all blamed the main channel for anything that went wrong after it.
+    let step = 'announce';
     try {
       const announcement = await slack.chat.postMessage({
         channel: mainChannelId,
         ...buildRequestAnnouncement({ userId, channelId, requestId: request.id }),
       });
+      step = 'record';
       store.setPassthroughRequestMessages(request.id, {
         messageTs: announcement.ts,
         threadTs: announcement.ts,
       });
+      step = 'answers';
       await slack.chat.postMessage({
         channel: mainChannelId,
         thread_ts: announcement.ts,
         text: `Entry form from <@${userId}>`,
         blocks: buildAnswersBlocks({ request }),
       });
+      step = 'vote';
       const vote = await slack.chat.postMessage({
         channel: mainChannelId,
         thread_ts: announcement.ts,
@@ -332,11 +458,30 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
         text: `Your request for <#${channelId}> is in. The owner can see your answers and the vote in the thread.`,
       });
     } catch (error) {
-      logger.error(`Could not announce a passthrough request: ${error?.message || error}`);
-      await viewClient.chat.postMessage({
-        channel: userId,
-        text: `I saved your request for <#${channelId}> but could not post it in the main channel. Tell the owner.`,
-      });
+      const code = error?.data?.error || error?.message || 'unknown error';
+      logger.error(`passthrough_request_failed step=${step} channel=${mainChannelId}: ${code}`);
+      const announced = step !== 'announce';
+      await viewClient.chat
+        .postMessage({
+          channel: userId,
+          text: announced
+            ? `Your request for <#${channelId}> is posted in <#${mainChannelId}>, but I could not finish the thread: \`${code}\`. Tell the owner.`
+            : `I saved your request for <#${channelId}> but Slack would not let me post in <#${mainChannelId}>: \`${code}\`. Tell the owner.`,
+        })
+        .catch(() => {});
+      if (!announced) {
+        // The announcement never landed, so the owner would never see this.
+        const owner = ownerId || settings.personal_channel_owner_id;
+        if (owner) {
+          await slack.chat
+            .postMessage({
+              channel: owner,
+              text: `Request #${request.id} from <@${userId}> for <#${channelId}> could not be posted in <#${mainChannelId}>: \`${code}\`. Here are the answers.`,
+              blocks: buildAnswersBlocks({ request }),
+            })
+            .catch((dmError) => logger.error(`Could not DM the owner: ${dmError?.message || dmError}`));
+        }
+      }
     }
   });
 
@@ -402,6 +547,52 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
     }
     return botUserId;
   }
+
+  /**
+   * Someone walked into a pass-through channel, so they get their own entry
+   * form. The message names them and only their button opens it.
+   */
+  app.event('member_joined_channel', async ({ event }) => {
+    const channelId = event?.channel || '';
+    const userId = event?.user || '';
+    if (!channelId || !userId) {
+      return;
+    }
+    const channel = store.getPassthroughChannel(channelId);
+    if (!channel || !channel.enabled) {
+      return;
+    }
+    if (userId === (await botId())) {
+      return;
+    }
+    // Already asked, or already let in: don't nag them every time they rejoin.
+    const settled = store
+      .listPassthroughRequests({ limit: 200 })
+      .some(
+        (request) =>
+          request.channel_id === channelId &&
+          request.user_id === userId &&
+          (request.status === 'open' || request.status === 'approved'),
+      );
+    if (settled) {
+      return;
+    }
+    try {
+      await slack.chat.postMessage({
+        channel: channelId,
+        ...buildJoinMessage({
+          channelId,
+          userId,
+          label: channel.label,
+          questionCount: (channel.questions || []).length,
+        }),
+      });
+    } catch (error) {
+      logger.warn(
+        `Could not post the entry form for ${userId} in ${channelId}: ${error?.data?.error || error?.message || error}`,
+      );
+    }
+  });
 
   app.event('reaction_added', async ({ event }) => {
     const item = event?.item || {};

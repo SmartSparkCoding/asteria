@@ -9,10 +9,15 @@ import { createStore } from '../src/database/store.js';
 import {
   buildAnchorMessage,
   buildAnswersBlocks,
+  buildJoinMessage,
   buildRequestAnnouncement,
   buildVoteMessage,
+  encodeOpenValue,
+  encodeRequestMeta,
   formatQuestionLines,
+  parseOpenValue,
   parseQuestionLines,
+  parseRequestMeta,
   resolveMainChannel,
   tallyText,
 } from '../src/passthrough/requests.js';
@@ -111,6 +116,42 @@ describe('passthrough messages', () => {
     );
     assert.equal(resolveMainChannel({ channel: {}, settings: { personal_channel_id: 'Cother' } }), 'Cother');
     assert.equal(resolveMainChannel({ channel: {}, settings: {} }), '');
+  });
+
+  it('names the person a join message is for, and only their button opens it', () => {
+    const message = buildJoinMessage({ channelId: 'C123', userId: 'U1', label: 'Builders', questionCount: 2 });
+    const text = message.blocks.map((block) => block.text?.text || '').join('\n');
+    assert.match(text, /Welcome, <@U1>/);
+    assert.match(text, /2 questions/);
+    const button = message.blocks.find((block) => block.type === 'actions').elements[0];
+    assert.equal(button.action_id, 'passthrough_request_open');
+    assert.deepEqual(parseOpenValue(button.value), { channelId: 'C123', targetUserId: 'U1', test: false });
+  });
+
+  it('round-trips the button value and the modal metadata', () => {
+    assert.deepEqual(parseOpenValue(encodeOpenValue({ channelId: 'C1', targetUserId: 'U2', test: true })), {
+      channelId: 'C1',
+      targetUserId: 'U2',
+      test: true,
+    });
+    // A button posted before join messages existed only carried the channel id.
+    assert.deepEqual(parseOpenValue('C1'), { channelId: 'C1', targetUserId: '', test: false });
+    assert.deepEqual(parseRequestMeta(encodeRequestMeta({ channelId: 'C1', targetUserId: 'U2', test: true })), {
+      channelId: 'C1',
+      targetUserId: 'U2',
+      test: true,
+    });
+    assert.deepEqual(parseRequestMeta('C1'), { channelId: 'C1', targetUserId: '', test: false });
+    assert.deepEqual(parseRequestMeta('not json'), { channelId: 'not json', targetUserId: '', test: false });
+  });
+
+  it('marks a test form as a test rather than a request', () => {
+    const message = buildJoinMessage({ channelId: 'C123', userId: 'U1', questionCount: 1, test: true });
+    const text = message.blocks.map((block) => block.text?.text || '').join('\n');
+    assert.match(text, /Test entry form/);
+    assert.match(text, /1 question\b/);
+    const button = message.blocks.find((block) => block.type === 'actions').elements[0];
+    assert.equal(parseOpenValue(button.value).test, true);
   });
 });
 
