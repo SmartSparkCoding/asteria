@@ -8,6 +8,7 @@ import { buildPassthroughChannelModal, buildPassthroughRequestModal } from '../s
 import { buildPassthroughView } from '../src/app-home/views.js';
 import { createStore } from '../src/database/store.js';
 import {
+  blocksToText,
   buildAnchorMessage,
   buildAnswersBlocks,
   buildDecisionMessage,
@@ -15,6 +16,7 @@ import {
   buildJoinMessage,
   buildRequestAnnouncement,
   buildVoteMessage,
+  cleanText,
   encodeOpenValue,
   encodeRequestMeta,
   formatQuestionLines,
@@ -118,6 +120,32 @@ describe('passthrough messages', () => {
       byUserId: 'U9',
     });
     assert.match(message.text, /<@U9> denied <@U1>/);
+  });
+
+  it('strips control characters and cuts long answers before they reach Slack', () => {
+    assert.equal(cleanText('a\u0000b\u0007c'), 'abc');
+    assert.equal(cleanText('x'.repeat(4000)).length, 2900);
+    const blocks = buildAnswersBlocks({
+      request: {
+        user_id: 'U1',
+        created_at: '2026-11-15 11:00:00',
+        answers: [{ question: 'Why?', answer: `hi\u0000there ${'y'.repeat(900)}` }],
+      },
+    });
+    const body = blocks[2].text.text;
+    assert.ok(!body.includes('\u0000'));
+    assert.ok(body.length < 3000);
+  });
+
+  it('can say the same thing without blocks when Slack refuses them', () => {
+    const blocks = buildAnswersBlocks({
+      request: { user_id: 'U1', created_at: null, answers: [{ question: 'Why?', answer: 'because' }] },
+    });
+    const text = blocksToText(blocks, 'fallback');
+    assert.match(text, /Entry form from <@U1>/);
+    assert.match(text, /Why\?/);
+    assert.match(text, /because/);
+    assert.equal(blocksToText([], 'fallback'), 'fallback');
   });
 
   it('waits ten days before a denied requester can fill it in again', () => {

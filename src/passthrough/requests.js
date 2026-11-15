@@ -19,6 +19,8 @@ export const DECIDE_REQUEST_ACTION = 'passthrough_decide';
 
 const MAX_QUESTIONS = 10;
 const MAX_ANSWER_LENGTH = 500;
+/** Slack refuses a section whose mrkdwn is longer than this. */
+const MAX_SECTION = 2900;
 
 /** How long someone waits after a denial before the form opens for them again. */
 export const REAPPLY_DAYS = 10;
@@ -255,14 +257,52 @@ export function buildDecisionResult({ request, decision, byUserId = '' }) {
   };
 }
 
+/**
+ * Slack rejects a whole message with `invalid_blocks` over one stray control
+ * character or one over-long section, so text is cleaned and cut first.
+ */
+export function cleanText(value, limit = MAX_SECTION) {
+  let out = '';
+  for (const char of String(value ?? '')) {
+    const code = char.codePointAt(0);
+    // Tabs and newlines are fine; the rest of the control range is not.
+    if ((code < 32 && code !== 9 && code !== 10) || code === 127) {
+      continue;
+    }
+    out += char;
+  }
+  return out.slice(0, limit);
+}
+
+/** The plain-text version of a block message, for when Slack refuses the blocks. */
+export function blocksToText(blocks, fallback = '') {
+  const parts = (blocks || [])
+    .map((block) => {
+      if (block?.text?.text) {
+        return block.text.text;
+      }
+      if (Array.isArray(block?.elements)) {
+        return block.elements
+          .map((element) => element?.text?.text || (typeof element?.text === 'string' ? element.text : ''))
+          .filter(Boolean)
+          .join(' · ');
+      }
+      return '';
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join('\n\n') : fallback;
+}
+
 export function buildAnswersBlocks({ request }) {
   const when = request?.created_at
     ? DateTime.fromSQL(request.created_at, { zone: 'utc' }).toUTC().toFormat('d LLL yyyy, HH:mm')
     : '';
   const header = `*Entry form from <@${request.user_id}>*${when ? ` · ${when} UTC` : ''}`;
-  const lines = (request.answers || []).map((entry) =>
-    entry.answer ? `*${entry.question}*\n${entry.answer}` : `*${entry.question}*\n_not answered_`,
-  );
+  const lines = (request.answers || []).map((entry) => {
+    const question = cleanText(entry?.question, 300);
+    const answer = cleanText(entry?.answer, MAX_ANSWER_LENGTH);
+    return answer ? `*${question}*\n${answer}` : `*${question}*\n_not answered_`;
+  });
   return [
     { type: 'section', text: { type: 'mrkdwn', text: header } },
     { type: 'divider' },
@@ -338,6 +378,50 @@ function readAnswers(viewState, questions) {
 export function registerPassthrough({ app, store, client, logger: givenLogger, ownerId, environment = {} }) {
   const logger = givenLogger || app.logger || console;
   const slack = client || app.client;
+
+  /**
+   * Slack answers `invalid_blocks` for the whole message over one stray control
+   * character or one over-long section, which used to leave a request announced
+   * with a half-built thread. Log the payload, then post the same words as plain
+   * text so the request still finishes.
+   */
+  async function postBlocks({ channel, thread_ts, text, blocks }) {
+    try {
+      return await slack.chat.postMessage({ channel, thread_ts, text, blocks });
+    } catch (error) {
+      if (error?.data?.error !== 'invalid_blocks') {
+        throw error;
+      }
+      logger.error(`invalid_blocks in ${channel}: ${JSON.stringify(blocks).slice(0, 1200)}`);
+      return await slack.chat.postMessage({
+        channel,
+        thread_ts,
+        text: blocksToText(blocks, text),
+      });
+    }
+  }
+
+  /**
+   * Getting someone in: join the channel if we are not in it, then invite them.
+   * A private channel cannot be joined, and a missing scope shows up on the
+   * invite, which is the error worth reporting.
+   */
+  async function inviteUser(channelId, userId) {
+    try {
+      await slack.conversations.join({ channel: channelId });
+    } catch {
+      // Already in it, private, or no scope to join. The invite below is the
+      // call whose error is worth surfacing.
+    }
+    try {
+      await slack.conversations.invite({ channel: channelId, users: userId });
+    } catch (error) {
+      if (error?.data?.error === 'already_in_channel') {
+        return;
+      }
+      throw error;
+    }
+  }
 
   async function refreshVoteMessage(requestId) {
     const request = store.getPassthroughRequest(requestId);
@@ -493,7 +577,7 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
     // catch-all blamed the main channel for anything that went wrong after it.
     let step = 'announce';
     try {
-      const announcement = await slack.chat.postMessage({
+      const announcement = await postBlocks({
         channel: mainChannelId,
         ...buildRequestAnnouncement({ userId, channelId }),
       });
@@ -503,14 +587,14 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
         threadTs: announcement.ts,
       });
       step = 'answers';
-      await slack.chat.postMessage({
+      await postBlocks({
         channel: mainChannelId,
         thread_ts: announcement.ts,
         text: `Entry form from <@${userId}>`,
         blocks: buildAnswersBlocks({ request }),
       });
       step = 'vote';
-      const vote = await slack.chat.postMessage({
+      const vote = await postBlocks({
         channel: mainChannelId,
         thread_ts: announcement.ts,
         ...buildVoteMessage({ request, counts: { yes: 0, no: 0 } }),
@@ -518,7 +602,7 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
       store.setPassthroughRequestMessages(request.id, { voteTs: vote.ts });
       step = 'decide';
       const manager = ownerId || settings.personal_channel_owner_id;
-      const decision = await slack.chat.postMessage({
+      const decision = await postBlocks({
         channel: mainChannelId,
         thread_ts: announcement.ts,
         ...buildDecisionMessage({ request, ownerId: manager }),
@@ -645,7 +729,7 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
       }
 
       try {
-        await slack.conversations.invite({ channel: request.channel_id, users: request.user_id });
+        await inviteUser(request.channel_id, request.user_id);
         store.setPassthroughRequestStatus(request.id, 'approved');
         await stampDecision('approve');
         await slack.chat.postMessage({
@@ -655,10 +739,15 @@ export function registerPassthrough({ app, store, client, logger: givenLogger, o
         });
       } catch (error) {
         logger.error(`Could not invite a passthrough user: ${error?.message || error}`);
+        const code = error?.data?.error || error?.message || 'unknown error';
+        const hint =
+          code === 'missing_scope'
+            ? 'I need the `channels:manage` and `groups:write` scopes, then a reinstall.'
+            : 'Invite them by hand, or give me the scope to do it.';
         await slack.chat.postMessage({
           channel: request.main_channel_id,
           thread_ts: request.thread_ts || request.message_ts,
-          text: `I could not invite <@${request.user_id}> to <#${request.channel_id}>: \`${error?.data?.error || error?.message || 'unknown error'}\`. Invite them by hand, or give me the scope to do it.`,
+          text: `I could not invite <@${request.user_id}> to <#${request.channel_id}>: \`${code}\`. ${hint}`,
         });
       }
     },
