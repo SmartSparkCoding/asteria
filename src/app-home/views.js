@@ -1354,6 +1354,12 @@ export function buildPassthroughView({ channels = [], requests = [], notice, nav
           },
           {
             type: 'button',
+            action_id: `passthrough_test_${channel.channel_id}`,
+            text: { type: 'plain_text', text: 'Send test' },
+            value: channel.channel_id,
+          },
+          {
+            type: 'button',
             action_id: `passthrough_remove_${channel.channel_id}`,
             text: { type: 'plain_text', text: 'Remove' },
             value: channel.channel_id,
@@ -1376,7 +1382,7 @@ export function buildPassthroughView({ channels = [], requests = [], notice, nav
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: 'Channels people can ask to be let into. I post a button in the channel, they fill in your form, and the request lands in the main channel with the answers and an anonymous yes/no vote in the thread. You approve or deny it.',
+          text: 'Channels people can ask to be let into. Everyone who joins one gets their own entry form, and only they can open it. The request lands in the main channel with the answers and an anonymous yes/no vote in the thread. You approve or deny it.',
         },
       },
       buildActionRow(

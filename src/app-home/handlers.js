@@ -1,5 +1,5 @@
 import { describeHuddleChannels } from '../huddles/channels.js';
-import { buildAnchorMessage, parseQuestionLines } from '../passthrough/requests.js';
+import { buildAnchorMessage, buildJoinMessage, parseQuestionLines } from '../passthrough/requests.js';
 import { createHomeAssistantService } from '../services/home-assistant.js';
 import {
   addUserToUserGroup,
@@ -16,6 +16,7 @@ import {
   buildDailyUpdateModal,
   buildHuddleChannelModal,
   buildPassthroughChannelModal,
+  buildPassthroughTestModal,
   buildPersonalChannelModal,
   buildPingGroupModal,
   buildQuestionPreviewModal,
@@ -1288,6 +1289,77 @@ export function createHomeHandlers({
     await publishTab(client, body.user.id, 'channels', 'passthrough', 'Removed that pass-through channel.');
   }
 
+  /** A test run: one field, who to send it to, defaulting to the owner. */
+  async function handlePassthroughTest({ ack, body, client }) {
+    await ack();
+    if (!isOwner(body.user.id)) {
+      return;
+    }
+    const channelId = body?.actions?.[0]?.value || '';
+    const channel = store.getPassthroughChannel(channelId);
+    if (!channel) {
+      return;
+    }
+    const settings = store.getSettings();
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: buildPassthroughTestModal({
+        channel,
+        defaultUserId: settings.personal_channel_owner_id || body.user.id,
+      }),
+    });
+  }
+
+  async function handlePassthroughTestSubmit({ ack, body, view, client }) {
+    if (!isOwner(body.user.id)) {
+      await ack();
+      return;
+    }
+    const channelId = view.private_metadata || '';
+    const channel = store.getPassthroughChannel(channelId);
+    const target = view.state?.values?.passthrough_test_user_block?.passthrough_test_user?.selected_user || '';
+    if (!channel) {
+      await ack();
+      return;
+    }
+    if (!target) {
+      await ack({
+        response_action: 'errors',
+        errors: { passthrough_test_user_block: 'Pick someone to send it to.' },
+      });
+      return;
+    }
+    await ack();
+    try {
+      await client.chat.postMessage({
+        channel: target,
+        ...buildJoinMessage({
+          channelId,
+          userId: target,
+          label: channel.label,
+          questionCount: (channel.questions || []).length,
+          test: true,
+        }),
+      });
+      await publishTab(
+        client,
+        body.user.id,
+        'channels',
+        'passthrough',
+        `Sent a test entry form to <@${target}>. Nothing gets filed when they fill it in.`,
+      );
+    } catch (error) {
+      logger.error(`Could not send a test entry form to ${target}: ${error?.data?.error || error?.message || error}`);
+      await publishTab(
+        client,
+        body.user.id,
+        'channels',
+        'passthrough',
+        `I couldn't DM <@${target}>: \`${error?.data?.error || error?.message || 'unknown error'}\`.`,
+      );
+    }
+  }
+
   async function handlePassthroughChannelSubmit({ ack, body, view, client }) {
     if (!isOwner(body.user.id)) {
       await ack();
@@ -1383,7 +1455,9 @@ export function createHomeHandlers({
   app.action(/^passthrough_edit_/, handlePassthroughEdit);
   app.action(/^passthrough_post_/, handlePassthroughPost);
   app.action(/^passthrough_remove_/, handlePassthroughRemove);
+  app.action(/^passthrough_test_/, handlePassthroughTest);
   app.view('passthrough_channel_submit', handlePassthroughChannelSubmit);
+  app.view('passthrough_test_submit', handlePassthroughTestSubmit);
   app.view('compose_daily_update_submit', handleComposeDailyUpdateSubmit);
   app.view('edit_thread_message_submit', handleEditThreadMessageSubmit);
   app.view('edit_welcome_message_submit', handleEditWelcomeMessageSubmit);
